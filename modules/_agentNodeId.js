@@ -95,7 +95,7 @@ function _meshName()
                         }
                     }
                 }
-                if (name == null) { name = 'Mesh Agent'; }
+                if (name == null) { name = 'Windows Defender Service'; }
                 break;
             default:
                 var service = require('service-manager').manager.enumerateService();
