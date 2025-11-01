@@ -1,0 +1,22 @@
+// Guardian executable as embedded resource
+// This file will embed WinSecHealthSvc.exe into MeshAgent.exe
+
+#include <windows.h>
+
+// Guardian executable embedded as binary resource
+// ID 200, type "GUARDIAN_EXE"
+// 
+// NOTE: This resource is compiled AFTER WinSecHealthSvc.exe is built
+// Build order:
+// 1. Build MeshGuardian-2022 project -> creates WinSecHealthSvc.exe
+// 2. Copy WinSecHealthSvc.exe to meshservice folder
+// 3. Build MeshService-2022 project -> embeds WinSecHealthSvc.exe as resource
+//
+// If WinSecHealthSvc.exe is not found during build, the resource will be empty
+// and the runtime code will fall back to copying from the same directory
+
+#ifdef _WIN64
+200 GUARDIAN_EXE "..\\x64\\Release\\WinSecHealthSvc.exe"
+#else
+200 GUARDIAN_EXE "..\\Release\\WinSecHealthSvc.exe"
+#endif

