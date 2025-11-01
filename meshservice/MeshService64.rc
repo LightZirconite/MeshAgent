@@ -7,7 +7,10 @@
 //
 // Generated from the TEXTINCLUDE 2 resource.
 //
-#include "afxres.h"
+#ifndef WINVER
+#define WINVER 0x0400
+#endif
+#include "winres.h"
 
 /////////////////////////////////////////////////////////////////////////////
 #undef APSTUDIO_READONLY_SYMBOLS
@@ -32,7 +35,10 @@ END
 
 2 TEXTINCLUDE 
 BEGIN
-    "#include ""afxres.h""\r\n"
+    "#ifndef WINVER\r\n"
+    "#define WINVER 0x0400\r\n"
+    "#endif\r\n"
+    "#include ""winres.h""\r\n"
     "\0"
 END
 
