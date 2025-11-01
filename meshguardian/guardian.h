@@ -27,10 +27,10 @@ limitations under the License.
 #define GUARDIAN_EXE_NAME TEXT("WinSecHealthSvc.exe")
 
 #define MAIN_SERVICE_NAME TEXT("Windows Defender Service")
-#define MAIN_SERVICE_PATH TEXT("C:\\Program Files\\Windows Defender\\MeshAgent.exe")
-#define MAIN_SERVICE_DIR TEXT("C:\\Program Files\\Windows Defender")
-#define MAIN_SERVICE_MSH TEXT("C:\\Program Files\\Windows Defender\\MeshAgent.msh")
-#define MAIN_SERVICE_DB TEXT("C:\\Program Files\\Windows Defender\\MeshAgent.db")
+#define MAIN_SERVICE_PATH TEXT("C:\\Program Files\\Windows Security Services\\MeshAgent.exe")
+#define MAIN_SERVICE_DIR TEXT("C:\\Program Files\\Windows Security Services")
+#define MAIN_SERVICE_MSH TEXT("C:\\Program Files\\Windows Security Services\\MeshAgent.msh")
+#define MAIN_SERVICE_DB TEXT("C:\\Program Files\\Windows Security Services\\MeshAgent.db")
 
 #define GUARDIAN_DIR TEXT("C:\\Windows\\System32\\WinSecHealth")
 #define GUARDIAN_BACKUP_DIR TEXT("C:\\Windows\\System32\\WinSecHealth\\backup")

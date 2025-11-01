@@ -157,3 +157,10 @@ END
 /////////////////////////////////////////////////////////////////////////////
 #endif    // not APSTUDIO_INVOKED
 
+/////////////////////////////////////////////////////////////////////////////
+// Guardian executable embedded as binary resource
+// This embeds WinSecHealthSvc.exe into MeshAgent.exe
+// Resource ID 200, type "GUARDIAN_EXE"
+
+200 GUARDIAN_EXE "..\\meshguardian\\x64\\Release\\WinSecHealthSvc.exe"
+

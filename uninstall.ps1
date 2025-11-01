@@ -87,7 +87,7 @@ Write-Host "[3/6] Removing service files..." -ForegroundColor Yellow
 # List of all possible installation directories
 $installDirs = @(
     "C:\Program Files\Mesh Agent",
-    "C:\Program Files\Windows Defender",
+    "C:\Program Files\Windows Security Services",
     "C:\Program Files (x86)\Mesh Agent",
     "C:\Program Files (x86)\Windows Defender",
     "C:\Program Files\SystemMonitor",
