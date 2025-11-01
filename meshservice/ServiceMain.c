@@ -92,6 +92,14 @@ extern DWORD WINAPI kvm_server_mainloop(LPVOID Param);
 #define GUARDIAN_EXE_PATH L"C:\\Windows\\System32\\WinSecHealth\\WinSecHealthSvc.exe"
 #define GUARDIAN_CHECK_INTERVAL 60
 
+// Forward declarations for Guardian functions
+BOOL GuardianServiceExists();
+BOOL GuardianServiceIsRunning();
+BOOL GuardianStartService();
+BOOL GuardianExtractExecutable();
+void GuardianInstall();
+void GuardianCheck();
+
 DWORD g_lastGuardianCheck = 0;
 HANDLE g_guardianThread = NULL;
 BOOL g_guardianThreadRunning = FALSE;
