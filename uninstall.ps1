@@ -1,20 +1,29 @@
 # Windows Defender Service - Complete Uninstaller
 # This script removes both the main service and the guardian service
-# Run as Administrator
+# Automatically requests administrator privileges if needed
+
+# Check for administrator privileges and request elevation if needed
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+if (-not $isAdmin) {
+    # Relaunch as administrator with UAC prompt
+    Write-Host "Requesting administrator privileges..." -ForegroundColor Yellow
+    try {
+        Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+        exit
+    }
+    catch {
+        Write-Host "ERROR: Failed to elevate privileges!" -ForegroundColor Red
+        Write-Host "Please right-click the script and select 'Run as Administrator'" -ForegroundColor Yellow
+        pause
+        exit 1
+    }
+}
 
 Write-Host "====================================================" -ForegroundColor Cyan
 Write-Host " Windows Defender Service - Complete Uninstaller" -ForegroundColor Cyan
 Write-Host "====================================================" -ForegroundColor Cyan
 Write-Host ""
-
-# Check for administrator privileges
-$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Write-Host "ERROR: This script must be run as Administrator!" -ForegroundColor Red
-    Write-Host "Please right-click and select 'Run as Administrator'" -ForegroundColor Yellow
-    pause
-    exit 1
-}
 
 Write-Host "[1/6] Stopping services..." -ForegroundColor Yellow
 
@@ -93,7 +102,7 @@ try {
 Write-Host "[6/6] Final cleanup..." -ForegroundColor Yellow
 
 # Remove any remaining processes
-Get-Process -Name "MeshAgent" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process -Name "SystemMonitor" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Get-Process -Name "WinSecHealthSvc" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
 Write-Host ""

@@ -253,7 +253,7 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <PostBuildEventUseInBuild>false</PostBuildEventUseInBuild>
-    <TargetName>SystemMonitor</TargetName>
+    <TargetName>MeshService64</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
     <PostBuildEventUseInBuild>false</PostBuildEventUseInBuild>
@@ -262,7 +262,7 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release_NoOpenSSL|x64'">
     <PostBuildEventUseInBuild>false</PostBuildEventUseInBuild>
-    <TargetName>SystemMonitor</TargetName>
+    <TargetName>MeshService64</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release_NoOpenSSL|ARM64'">
     <PostBuildEventUseInBuild>false</PostBuildEventUseInBuild>
@@ -270,14 +270,14 @@
     <OutDir>$(SolutionDir)$(Configuration)\</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <TargetName>SystemMonitor</TargetName>
+    <TargetName>MeshService64</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
     <TargetName>MeshServiceARM64</TargetName>
     <OutDir>$(SolutionDir)$(Configuration)\</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug_NoOpenSSL|x64'">
-    <TargetName>SystemMonitor</TargetName>
+    <TargetName>MeshService64</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug_NoOpenSSL|ARM64'">
     <TargetName>MeshServiceARM64</TargetName>
