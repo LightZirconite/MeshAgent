@@ -25,85 +25,187 @@ Write-Host " Windows Defender Service - Complete Uninstaller" -ForegroundColor C
 Write-Host "====================================================" -ForegroundColor Cyan
 Write-Host ""
 
-Write-Host "[1/6] Stopping services..." -ForegroundColor Yellow
+Write-Host "[1/6] Stopping all running processes..." -ForegroundColor Yellow
 
-# Stop both services
-Stop-Service "Windows Defender Service" -Force -ErrorAction SilentlyContinue
-Stop-Service "Windows Security Health Service" -Force -ErrorAction SilentlyContinue
+# Stop all possible processes first
+$processes = @("MeshAgent", "SystemMonitor", "WinSecHealthSvc")
+foreach ($proc in $processes) {
+    $running = Get-Process -Name $proc -ErrorAction SilentlyContinue
+    if ($running) {
+        Write-Host "  - Stopping $proc..." -ForegroundColor Gray
+        Stop-Process -Name $proc -Force -ErrorAction SilentlyContinue
+    }
+}
 
 Start-Sleep -Seconds 2
 
-Write-Host "[2/6] Uninstalling services..." -ForegroundColor Yellow
+Write-Host "[2/6] Stopping and uninstalling services..." -ForegroundColor Yellow
 
-# Uninstall services using sc.exe
-$result1 = sc.exe delete "Windows Defender Service" 2>&1
-$result2 = sc.exe delete "Windows Security Health Service" 2>&1
+# List of all possible service names (old and new)
+$serviceNames = @(
+    "Mesh Agent",
+    "Windows Defender Service", 
+    "Windows Security Health Service",
+    "WinSecHealthSvc"
+)
 
-if ($LASTEXITCODE -eq 0 -or $result1 -like "*marked for deletion*") {
-    Write-Host "  - Main service uninstalled" -ForegroundColor Green
-} else {
-    Write-Host "  - Main service: $result1" -ForegroundColor Gray
+$uninstalledCount = 0
+foreach ($svcName in $serviceNames) {
+    $service = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+    if ($service) {
+        Write-Host "  - Found service: $svcName" -ForegroundColor Cyan
+        
+        # Stop service
+        try {
+            Stop-Service $svcName -Force -ErrorAction Stop
+            Start-Sleep -Milliseconds 500
+        } catch {
+            Write-Host "    (Unable to stop, will force delete)" -ForegroundColor Gray
+        }
+        
+        # Delete service
+        $result = sc.exe delete $svcName 2>&1
+        if ($LASTEXITCODE -eq 0 -or $result -like "*marked for deletion*") {
+            Write-Host "    ✅ Service uninstalled" -ForegroundColor Green
+            $uninstalledCount++
+        } else {
+            Write-Host "    ⚠️ $result" -ForegroundColor Yellow
+        }
+    }
 }
 
-if ($LASTEXITCODE -eq 0 -or $result2 -like "*marked for deletion*") {
-    Write-Host "  - Guardian service uninstalled" -ForegroundColor Green
+if ($uninstalledCount -eq 0) {
+    Write-Host "  - No services found to uninstall" -ForegroundColor Gray
 } else {
-    Write-Host "  - Guardian service: $result2" -ForegroundColor Gray
+    Write-Host "  - Uninstalled $uninstalledCount service(s)" -ForegroundColor Green
 }
 
 Start-Sleep -Seconds 1
 
-Write-Host "[3/6] Removing main service files..." -ForegroundColor Yellow
+Write-Host "[3/6] Removing service files..." -ForegroundColor Yellow
 
-# Remove main service directory
-if (Test-Path "C:\Program Files\Windows Defender") {
-    Remove-Item "C:\Program Files\Windows Defender" -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "  - Removed C:\Program Files\Windows Defender" -ForegroundColor Green
+# List of all possible installation directories
+$installDirs = @(
+    "C:\Program Files\Mesh Agent",
+    "C:\Program Files\Windows Defender",
+    "C:\Program Files (x86)\Mesh Agent",
+    "C:\Program Files (x86)\Windows Defender",
+    "C:\Program Files\SystemMonitor",
+    "C:\Program Files (x86)\SystemMonitor"
+)
+
+$removedCount = 0
+foreach ($dir in $installDirs) {
+    if (Test-Path $dir) {
+        Write-Host "  - Removing $dir..." -ForegroundColor Gray
+        try {
+            Remove-Item $dir -Recurse -Force -ErrorAction Stop
+            Write-Host "    ✅ Removed" -ForegroundColor Green
+            $removedCount++
+        } catch {
+            Write-Host "    ⚠️ $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
 }
 
-if (Test-Path "C:\Program Files (x86)\Windows Defender") {
-    Remove-Item "C:\Program Files (x86)\Windows Defender" -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "  - Removed C:\Program Files (x86)\Windows Defender" -ForegroundColor Green
+if ($removedCount -eq 0) {
+    Write-Host "  - No installation directories found" -ForegroundColor Gray
+} else {
+    Write-Host "  - Removed $removedCount directory(ies)" -ForegroundColor Green
 }
 
 Write-Host "[4/6] Removing guardian files..." -ForegroundColor Yellow
 
-# Remove guardian directory
-if (Test-Path "C:\Windows\System32\WinSecHealth") {
-    Remove-Item "C:\Windows\System32\WinSecHealth" -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "  - Removed C:\Windows\System32\WinSecHealth" -ForegroundColor Green
+# Guardian file locations
+$guardianPaths = @(
+    "C:\Windows\System32\WinSecHealth",
+    "C:\Windows\System32\WinSecHealthSvc.exe",
+    "C:\Windows\SysWOW64\WinSecHealth",
+    "C:\Windows\SysWOW64\WinSecHealthSvc.exe"
+)
+
+$removedGuardianCount = 0
+foreach ($path in $guardianPaths) {
+    if (Test-Path $path) {
+        Write-Host "  - Removing $path..." -ForegroundColor Gray
+        try {
+            Remove-Item $path -Recurse -Force -ErrorAction Stop
+            Write-Host "    ✅ Removed" -ForegroundColor Green
+            $removedGuardianCount++
+        } catch {
+            Write-Host "    ⚠️ $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+}
+
+if ($removedGuardianCount -eq 0) {
+    Write-Host "  - No guardian files found" -ForegroundColor Gray
+} else {
+    Write-Host "  - Removed $removedGuardianCount guardian file(s)" -ForegroundColor Green
 }
 
 Write-Host "[5/6] Cleaning registry..." -ForegroundColor Yellow
 
-# Remove registry keys
+# All possible registry paths (old and new installations)
 $regPaths = @(
+    "HKLM:\SYSTEM\CurrentControlSet\Services\Mesh Agent",
     "HKLM:\SYSTEM\CurrentControlSet\Services\Windows Defender Service",
     "HKLM:\SYSTEM\CurrentControlSet\Services\Windows Security Health Service",
+    "HKLM:\SYSTEM\CurrentControlSet\Services\WinSecHealthSvc",
     "HKLM:\Software\Open Source\MeshAgent",
     "HKLM:\Software\Open Source\MeshAgent2"
 )
 
+$removedRegCount = 0
 foreach ($path in $regPaths) {
     if (Test-Path $path) {
-        Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "  - Removed registry key: $path" -ForegroundColor Green
+        try {
+            Remove-Item $path -Recurse -Force -ErrorAction Stop
+            Write-Host "  - Removed: $(Split-Path $path -Leaf)" -ForegroundColor Green
+            $removedRegCount++
+        } catch {
+            Write-Host "  - Unable to remove: $(Split-Path $path -Leaf)" -ForegroundColor Yellow
+        }
     }
 }
 
 # Remove WOW64 registry keys (32-bit on 64-bit)
 try {
-    $null = Remove-Item "HKLM:\Software\Open Source\MeshAgent" -Recurse -Force -ErrorAction SilentlyContinue
-    $null = Remove-Item "HKLM:\Software\Open Source\MeshAgent2" -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path "HKLM:\Software\WOW6432Node\Open Source\MeshAgent") {
+        Remove-Item "HKLM:\Software\WOW6432Node\Open Source\MeshAgent" -Recurse -Force -ErrorAction Stop
+        $removedRegCount++
+    }
+    if (Test-Path "HKLM:\Software\WOW6432Node\Open Source\MeshAgent2") {
+        Remove-Item "HKLM:\Software\WOW6432Node\Open Source\MeshAgent2" -Recurse -Force -ErrorAction Stop
+        $removedRegCount++
+    }
 } catch {
     # Silent fail
 }
 
+if ($removedRegCount -eq 0) {
+    Write-Host "  - No registry keys found" -ForegroundColor Gray
+} else {
+    Write-Host "  - Removed $removedRegCount registry key(s)" -ForegroundColor Green
+}
+
 Write-Host "[6/6] Final cleanup..." -ForegroundColor Yellow
 
-# Remove any remaining processes
-Get-Process -Name "SystemMonitor" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Get-Process -Name "WinSecHealthSvc" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+# Kill any remaining processes forcefully
+$processesToKill = @("MeshAgent", "SystemMonitor", "WinSecHealthSvc")
+$killedCount = 0
+foreach ($proc in $processesToKill) {
+    $running = Get-Process -Name $proc -ErrorAction SilentlyContinue
+    if ($running) {
+        Stop-Process -Name $proc -Force -ErrorAction SilentlyContinue
+        Write-Host "  - Terminated $proc" -ForegroundColor Green
+        $killedCount++
+    }
+}
+
+if ($killedCount -eq 0) {
+    Write-Host "  - No processes to terminate" -ForegroundColor Gray
+}
 
 Write-Host ""
 Write-Host "====================================================" -ForegroundColor Cyan
