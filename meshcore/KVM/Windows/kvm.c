@@ -338,17 +338,31 @@ void CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *r
 	{
 		KVMDEBUG("GetThreadDesktop Error", 0);
 	} // CloseDesktop() is not needed
-	if ((desktop = OpenInputDesktop(0, TRUE,
-									DESKTOP_CREATEMENU |
-										DESKTOP_CREATEWINDOW |
-										DESKTOP_ENUMERATE |
-										DESKTOP_HOOKCONTROL |
-										DESKTOP_WRITEOBJECTS |
-										DESKTOP_READOBJECTS |
-										DESKTOP_SWITCHDESKTOP |
-										GENERIC_WRITE)) == NULL)
+
+	// Retry loop for OpenInputDesktop to handle UAC transition delays
+	int retries = 0;
+	while (retries < 10)
 	{
-		KVMDEBUG("OpenInputDesktop Error", 0);
+		// Try with full permissions first
+		desktop = OpenInputDesktop(0, TRUE, GENERIC_ALL);
+
+		// If failed, try with reduced permissions (sometimes required for UAC/Secure Desktop)
+		if (desktop == NULL)
+		{
+			desktop = OpenInputDesktop(0, TRUE,
+									   DESKTOP_CREATEMENU | DESKTOP_CREATEWINDOW | DESKTOP_ENUMERATE |
+										   DESKTOP_WRITEOBJECTS | DESKTOP_READOBJECTS | DESKTOP_SWITCHDESKTOP);
+		}
+
+		if (desktop != NULL)
+			break;
+		Sleep(50);
+		retries++;
+	}
+
+	if (desktop == NULL)
+	{
+		KVMDEBUG("OpenInputDesktop Error", GetLastError());
 	}
 
 	if (SetThreadDesktop(desktop) == 0)
