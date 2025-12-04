@@ -1007,7 +1007,7 @@ DWORD WINAPI kvm_server_mainloop_ex(LPVOID parm)
 		// Send the list of displays
 		kvm_send_display_list(writeHandler, reserved);
 
-		Sleep(100); // Pausing here seems to fix connection issues, especially with WebRTC. TODO: Investigate why.
+		// Sleep(100); // Pausing here seems to fix connection issues, especially with WebRTC. TODO: Investigate why.
 		KVMDEBUG("kvm_server_mainloop / start3", (int)GetCurrentThreadId());
 
 		// Loop and send only when a tile changes.

@@ -74,7 +74,7 @@ HDC hCaptureDC;
 HBITMAP hCapturedBitmap;
 // HDC hdc;
 CLSID encoderClsid;
-ULONG encCompression = 50; // Image compression
+ULONG encCompression = 60; // Image compression
 EncoderParameters encParam;
 LPVOID tilebuffer = NULL;
 unsigned int tilebuffersize = 0;
