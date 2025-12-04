@@ -383,6 +383,7 @@ void CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *r
 				KVMDEBUG("DESKTOP NAME CHANGE DETECTED, triggering shutdown", 0);
 				ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: kvm_server_currentDesktop: NAME CHANGE DETECTED...");
 				g_desktop_switch_pending = 1;
+				kvm_server_currentDesktopname = ((int *)name)[0];
 			}
 		}
 	}
@@ -578,7 +579,7 @@ int kvm_server_inputdata(char *block, int blocklen, ILibKVM_WriteHandler writeHa
 		if (size >= 10)
 		{
 			int fr = ((int)ntohs(((unsigned short *)(block + 8))[0]));
-			if (fr >= 20 && fr <= 5000)
+			if (fr >= 10 && fr <= 5000)
 				FRAME_RATE_TIMER = fr;
 		}
 		if (size >= 8)
@@ -643,7 +644,7 @@ int kvm_server_inputdata(char *block, int blocklen, ILibKVM_WriteHandler writeHa
 	case MNG_KVM_FRAME_RATE_TIMER:
 	{
 		int fr = ((int)ntohs(((unsigned short *)(block))[2]));
-		if (fr >= 20 && fr <= 5000)
+		if (fr >= 10 && fr <= 5000)
 			FRAME_RATE_TIMER = fr;
 		break;
 	}
@@ -1188,10 +1189,10 @@ DWORD WINAPI kvm_server_mainloop_ex(LPVOID parm)
 			height = FRAME_RATE_TIMER;
 			while (!g_shutdown && height > 0)
 			{
-				if (height > 50)
+				if (height > 10)
 				{
-					height -= 50;
-					Sleep(50);
+					height -= 10;
+					Sleep(10);
 				}
 				else
 				{
