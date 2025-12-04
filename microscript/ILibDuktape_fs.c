@@ -38,6 +38,14 @@ limitations under the License.
 
 #ifndef WIN32
 #include <dirent.h>
+#ifdef __linux__
+#include <mntent.h>
+#include <sys/statvfs.h>
+#endif
+#ifdef __APPLE__
+#include <sys/mount.h>
+#include <sys/param.h>
+#endif
 #endif
 
 #ifdef _POSIX
@@ -1653,6 +1661,59 @@ duk_ret_t ILibDuktape_fs_readDrivesSync(duk_context *ctx)
 		if (ILibDuktape_fs_readDrivesSync_result_PUSH(ctx, volumeName) != 0) { duk_put_prop_index(ctx, -2, i++); }
 	}
 	FindVolumeClose(h);
+#endif
+
+#ifdef __linux__
+	struct mntent *ent;
+	FILE *aFile;
+	struct statvfs stat;
+	int i = 0;
+
+	aFile = setmntent("/proc/mounts", "r");
+	if (aFile != NULL) {
+		while (NULL != (ent = getmntent(aFile))) {
+			if (strncmp(ent->mnt_fsname, "/dev/", 5) == 0) {
+				duk_push_object(ctx);
+				duk_push_string(ctx, ent->mnt_dir);
+				duk_put_prop_string(ctx, -2, "name");
+
+				if (statvfs(ent->mnt_dir, &stat) == 0) {
+					duk_push_number(ctx, (duk_double_t)((uint64_t)stat.f_blocks * (uint64_t)stat.f_frsize));
+					duk_put_prop_string(ctx, -2, "size");
+					duk_push_number(ctx, (duk_double_t)((uint64_t)stat.f_bavail * (uint64_t)stat.f_frsize));
+					duk_put_prop_string(ctx, -2, "free");
+				}
+
+				duk_push_string(ctx, "FIXED");
+				duk_put_prop_string(ctx, -2, "type");
+				duk_put_prop_index(ctx, -2, i++);
+			}
+		}
+		endmntent(aFile);
+	}
+#endif
+
+#ifdef __APPLE__
+	struct statfs *mounts;
+	int num_mounts;
+	int i;
+
+	num_mounts = getmntinfo(&mounts, MNT_WAIT);
+	for (i = 0; i < num_mounts; i++) {
+		duk_push_object(ctx);
+		duk_push_string(ctx, mounts[i].f_mntonname);
+		duk_put_prop_string(ctx, -2, "name");
+
+		duk_push_number(ctx, (duk_double_t)((uint64_t)mounts[i].f_blocks * (uint64_t)mounts[i].f_bsize));
+		duk_put_prop_string(ctx, -2, "size");
+		duk_push_number(ctx, (duk_double_t)((uint64_t)mounts[i].f_bavail * (uint64_t)mounts[i].f_bsize));
+		duk_put_prop_string(ctx, -2, "free");
+
+		duk_push_string(ctx, "FIXED");
+		duk_put_prop_string(ctx, -2, "type");
+
+		duk_put_prop_index(ctx, -2, i);
+	}
 #endif
 
 	return 1;
