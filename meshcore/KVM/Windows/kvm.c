@@ -478,6 +478,12 @@ int kvm_server_inputdata(char *block, int blocklen, ILibKVM_WriteHandler writeHa
 	// KVMDEBUG("kvm_server_inputdata", blocklen);
 	CheckDesktopSwitch(0, writeHandler, reserved);
 
+	// Re-apply input block if it was active, to counter Win+L or other system resets
+	if (g_blockinput)
+	{
+		BlockInput(1);
+	}
+
 	type = ntohs(((unsigned short *)(block))[0]);
 	size = ntohs(((unsigned short *)(block))[1]);
 
@@ -1126,7 +1132,7 @@ DWORD WINAPI kvm_server_mainloop_ex(LPVOID parm)
 						while (!g_shutdown && (g_pause))
 						{
 							Sleep(50); /*printf(".");*/
-						}			   // If the socket is in pause state, wait here. //ToDo: YLIAN!!!!
+						} // If the socket is in pause state, wait here. //ToDo: YLIAN!!!!
 
 						if (g_shutdown || SCALING_FACTOR != SCALING_FACTOR_NEW)
 						{
