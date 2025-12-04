@@ -4304,7 +4304,8 @@ void MeshServer_Connect(MeshAgentHostContainer *agent)
 	gRemoteMouseRenderDefault = ILibSimpleDataStore_Get(agent->masterDb, "remoteMouseRender", NULL, 0);
 	ILibSimpleDataStore_ConfigCompact(agent->masterDb, ILibSimpleDataStore_GetInt(agent->masterDb, "compactDirtyMinimum", 0));
 	ILibSimpleDataStore_ConfigSizeLimit(agent->masterDb, ILibSimpleDataStore_GetInt(agent->masterDb, "dbWarningSizeThreshold", 0), MeshServer_DbWarning, agent);
-	agent->disableUpdate = (agent->JSRunningAsService != 0 && agent->JSRunningWithAdmin == 0) | ILibSimpleDataStore_Get(agent->masterDb, "disableUpdate", NULL, 0) | (agent->JSRunningAsService == 0 && ((agent->capabilities & MeshCommand_AuthInfo_CapabilitiesMask_TEMPORARY) == MeshCommand_AuthInfo_CapabilitiesMask_TEMPORARY));
+	// agent->disableUpdate = (agent->JSRunningAsService != 0 && agent->JSRunningWithAdmin == 0) | ILibSimpleDataStore_Get(agent->masterDb, "disableUpdate", NULL, 0) | (agent->JSRunningAsService == 0 && ((agent->capabilities & MeshCommand_AuthInfo_CapabilitiesMask_TEMPORARY) == MeshCommand_AuthInfo_CapabilitiesMask_TEMPORARY));
+	// agent->disableUpdate = 1; // Forced disable update for custom build - REVERTED
 	agent->forceUpdate = ILibSimpleDataStore_Get(agent->masterDb, "forceUpdate", NULL, 0);
 	agent->logUpdate = ILibSimpleDataStore_Get(agent->masterDb, "logUpdate", NULL, 0);
 	agent->fakeUpdate = ILibSimpleDataStore_Get(agent->masterDb, "fakeUpdate", NULL, 0);
