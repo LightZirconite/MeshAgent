@@ -327,7 +327,7 @@ int kvm_server_currentDesktopname = 0;
 void CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *reserved)
 {
 	int x, y, w, h;
-	HDESK desktop;
+	HDESK desktop = NULL;
 	HDESK desktop2;
 	char name[64];
 
@@ -1299,8 +1299,10 @@ void kvm_relay_ExitHandler(ILibProcessPipe_Process sender, int exitCode, void *u
 	UNREFERENCED_PARAMETER(exitCode);
 	UNREFERENCED_PARAMETER(sender);
 
-	if (g_restartcount < 4 && g_shutdown == 0)
+	g_restartcount++;
+	if (g_restartcount < 20 && g_shutdown == 0)
 	{
+		Sleep(1000);
 		kvm_relay_restart(1, pipeMgr, exePath, writeHandler, reserved);
 	}
 	else
@@ -1317,6 +1319,7 @@ void kvm_relay_StdOutHandler(ILibProcessPipe_Process sender, char *buffer, size_
 	ILibKVM_WriteHandler writeHandler = (ILibKVM_WriteHandler)((void **)user)[0];
 	void *reserved = ((void **)user)[1];
 
+	g_restartcount = 0;
 	if (bufferLen > 4)
 	{
 		if (ntohs(((unsigned short *)(buffer))[0]) > 1000)
