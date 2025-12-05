@@ -6933,7 +6933,7 @@ void MeshAgent_PerformSelfUpdate(char *selfpath, char *exepath, int argc, char *
 		Sleep(5000);
 
 	// Now run the process
-	if (!CreateProcessW(NULL, ILibUTF8ToWide(ILibScratchPad2, -1), NULL, NULL, TRUE, 0, NULL, NULL, &info, &processInfo))
+	if (!CreateProcessW(NULL, ILibUTF8ToWide(ILibScratchPad2, -1), NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &info, &processInfo))
 	{
 		// TODO: Failed to run update.
 	}

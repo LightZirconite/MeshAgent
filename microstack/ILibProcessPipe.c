@@ -742,8 +742,8 @@ ILibProcessPipe_Process ILibProcessPipe_Manager_SpawnProcessEx4(ILibProcessPipe_
 		envvars = wideEnv;
 	}
 
-	if (((spawnType == ILibProcessPipe_SpawnTypes_DEFAULT || spawnType == ILibProcessPipe_SpawnTypes_DETACHED) && !CreateProcessW(ILibUTF8ToWideEx(target, -1, tmp1, (int)sizeof(tmp1) / 2), ILibUTF8ToWideEx(parms, -1, tmp2, (int)sizeof(tmp2) / 2), NULL, NULL, spawnType == ILibProcessPipe_SpawnTypes_DETACHED ? FALSE : TRUE, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | (needSetSid != 0 ? (DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP) : 0x00), envvars, NULL, &info, &processInfo)) ||
-		(spawnType != ILibProcessPipe_SpawnTypes_DEFAULT && !CreateProcessAsUserW(userToken, ILibUTF8ToWideEx(target, -1, tmp1, (int)sizeof(tmp1) / 2), ILibUTF8ToWideEx(parms, -1, tmp2, (int)sizeof(tmp2) / 2), NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | (needSetSid != 0 ? (DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP) : 0x00), envvars, NULL, &info, &processInfo)))
+	if (((spawnType == ILibProcessPipe_SpawnTypes_DEFAULT || spawnType == ILibProcessPipe_SpawnTypes_DETACHED) && !CreateProcessW(ILibUTF8ToWideEx(target, -1, tmp1, (int)sizeof(tmp1) / 2), ILibUTF8ToWideEx(parms, -1, tmp2, (int)sizeof(tmp2) / 2), NULL, NULL, spawnType == ILibProcessPipe_SpawnTypes_DETACHED ? FALSE : TRUE, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | DETACHED_PROCESS | (needSetSid != 0 ? (CREATE_NEW_PROCESS_GROUP) : 0x00), envvars, NULL, &info, &processInfo)) ||
+		(spawnType != ILibProcessPipe_SpawnTypes_DEFAULT && !CreateProcessAsUserW(userToken, ILibUTF8ToWideEx(target, -1, tmp1, (int)sizeof(tmp1) / 2), ILibUTF8ToWideEx(parms, -1, tmp2, (int)sizeof(tmp2) / 2), NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | DETACHED_PROCESS | (needSetSid != 0 ? (CREATE_NEW_PROCESS_GROUP) : 0x00), envvars, NULL, &info, &processInfo)))
 	{
 		int ll = GetLastError();
 		if (spawnType != ILibProcessPipe_SpawnTypes_DETACHED)
