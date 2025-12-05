@@ -123,6 +123,9 @@ int g_remotepause = 1;
 int g_restartcount = 0;
 struct tileInfo_t **tileInfo = NULL;
 int g_slavekvm = 0;
+int g_desktopCheckFailCount = 0;
+char g_lastDesktopName[64] = {0};
+DWORD g_lastDesktopSwitchTime = 0;
 static ILibProcessPipe_Process gChildProcess;
 int kvm_relay_restart(int paused, void *pipeMgr, char *exePath, ILibKVM_WriteHandler writeHandler, void *reserved);
 
@@ -324,12 +327,38 @@ void kvm_send_display_list(ILibKVM_WriteHandler writeHandler, void *reserved)
 
 void kvm_server_SetResolution();
 int kvm_server_currentDesktopname = 0;
+
+// Check if the Secure Desktop (UAC) is currently active by trying to open Winlogon desktop
+int IsSecureDesktopActive()
+{
+	HDESK hSecureDesk = OpenDesktopA("Winlogon", 0, FALSE, DESKTOP_SWITCHDESKTOP);
+	if (hSecureDesk != NULL)
+	{
+		// Check if this is the current input desktop
+		HDESK hInputDesk = OpenInputDesktop(0, FALSE, DESKTOP_SWITCHDESKTOP);
+		if (hInputDesk != NULL)
+		{
+			char inputName[64] = {0};
+			char secureName[64] = {0};
+			GetUserObjectInformationA(hInputDesk, UOI_NAME, inputName, sizeof(inputName), NULL);
+			GetUserObjectInformationA(hSecureDesk, UOI_NAME, secureName, sizeof(secureName), NULL);
+			CloseDesktop(hInputDesk);
+			CloseDesktop(hSecureDesk);
+			// Compare desktop names - if input is Winlogon, secure desktop is active
+			return (_stricmp(inputName, "Winlogon") == 0 || _stricmp(inputName, "Default") != 0);
+		}
+		CloseDesktop(hSecureDesk);
+	}
+	return 0;
+}
+
 int CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *reserved)
 {
 	int x, y, w, h;
 	HDESK desktop = NULL;
 	HDESK desktop2;
-	char name[64];
+	char name[64] = {0};
+	DWORD lastError = 0;
 
 	// KVMDEBUG("CheckDesktopSwitch", checkres);
 
@@ -339,9 +368,12 @@ int CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *re
 		KVMDEBUG("GetThreadDesktop Error", 0);
 	} // CloseDesktop() is not needed
 
-	// Retry loop for OpenInputDesktop to handle UAC transition delays
+	// Enhanced retry loop for OpenInputDesktop with exponential backoff for UAC transitions
 	int retries = 0;
-	while (retries < 10)
+	int maxRetries = 20; // Increased from 10 for better UAC handling
+	int sleepTime = 25;	 // Start with shorter sleep, will increase
+
+	while (retries < maxRetries)
 	{
 		// Try with full permissions first
 		desktop = OpenInputDesktop(0, TRUE, GENERIC_ALL);
@@ -354,20 +386,69 @@ int CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *re
 										   DESKTOP_WRITEOBJECTS | DESKTOP_READOBJECTS | DESKTOP_SWITCHDESKTOP);
 		}
 
+		// If still failed, try with minimal read permissions
+		if (desktop == NULL)
+		{
+			desktop = OpenInputDesktop(0, TRUE, DESKTOP_READOBJECTS | DESKTOP_SWITCHDESKTOP);
+		}
+
 		if (desktop != NULL)
 			break;
-		Sleep(50);
+
+		lastError = GetLastError();
+
+		// If access denied, we might be in a desktop transition - wait and retry
+		if (lastError == ERROR_ACCESS_DENIED)
+		{
+			g_desktopCheckFailCount++;
+			if (g_desktopCheckFailCount > 5)
+			{
+				// Multiple consecutive failures - likely a desktop switch in progress
+				KVMDEBUG("Multiple OpenInputDesktop failures - desktop switch likely in progress", g_desktopCheckFailCount);
+				g_desktop_switch_pending = 1;
+				return 0;
+			}
+		}
+
+		Sleep(sleepTime);
+		if (sleepTime < 100)
+			sleepTime += 10; // Exponential backoff up to 100ms
 		retries++;
 	}
 
 	if (desktop == NULL)
 	{
-		KVMDEBUG("OpenInputDesktop Error", GetLastError());
+		KVMDEBUG("OpenInputDesktop Error", lastError);
+		g_desktopCheckFailCount++;
+
+		// If we consistently can't open the desktop, trigger a switch
+		if (g_desktopCheckFailCount > 3)
+		{
+			g_desktop_switch_pending = 1;
+			ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1,
+									 "KVM [SLAVE]: Cannot access input desktop after %d attempts, triggering restart", g_desktopCheckFailCount);
+		}
 		return 0;
 	}
 
+	// Reset failure counter on success
+	g_desktopCheckFailCount = 0;
+
 	if (SetThreadDesktop(desktop) == 0)
 	{
+		DWORD setError = GetLastError();
+		KVMDEBUG("SetThreadDesktop failed", setError);
+
+		// If SetThreadDesktop fails with access denied, we need to restart on the new desktop
+		if (setError == ERROR_ACCESS_DENIED)
+		{
+			ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1,
+									 "KVM [SLAVE]: SetThreadDesktop ACCESS_DENIED - need to restart on new desktop");
+			g_desktop_switch_pending = 1;
+			CloseDesktop(desktop);
+			return 0;
+		}
+
 		if (CloseDesktop(desktop) == 0)
 		{
 			KVMDEBUG("CloseDesktop1 Error", 0);
@@ -375,32 +456,37 @@ int CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *re
 		desktop = desktop2;
 	}
 
-	// Check desktop name switch
-	if (GetUserObjectInformationA(desktop, UOI_NAME, name, 63, 0))
+	// Check desktop name switch - use full string comparison instead of just first 4 bytes
+	if (GetUserObjectInformationA(desktop, UOI_NAME, name, sizeof(name) - 1, NULL))
 	{
-		// ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: name = %s", name);
+		name[sizeof(name) - 1] = 0; // Ensure null termination
 
-		// KVMDEBUG(name, 0);
-		if (kvm_server_currentDesktopname == 0)
+		if (g_lastDesktopName[0] == 0)
 		{
-			// This is the first time we come here.
+			// This is the first time we come here - store the full name
+			strncpy_s(g_lastDesktopName, sizeof(g_lastDesktopName), name, _TRUNCATE);
 			kvm_server_currentDesktopname = ((int *)name)[0];
+			ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1,
+									 "KVM [SLAVE]: Initial desktop: %s", name);
 		}
 		else
 		{
-			// If the desktop name has changed, shutdown.
-			if (kvm_server_currentDesktopname != ((int *)name)[0])
+			// Compare full desktop names for more reliable detection
+			if (_stricmp(g_lastDesktopName, name) != 0)
 			{
 				KVMDEBUG("DESKTOP NAME CHANGE DETECTED, triggering shutdown", 0);
-				ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: kvm_server_currentDesktop: NAME CHANGE DETECTED...");
+				ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1,
+										 "KVM [SLAVE]: Desktop changed from '%s' to '%s' - triggering restart", g_lastDesktopName, name);
 				g_desktop_switch_pending = 1;
+				g_lastDesktopSwitchTime = GetTickCount();
+				strncpy_s(g_lastDesktopName, sizeof(g_lastDesktopName), name, _TRUNCATE);
 				kvm_server_currentDesktopname = ((int *)name)[0];
 			}
 		}
 	}
 	else
 	{
-		KVMDEBUG("GetUserObjectInformation Error", 0);
+		KVMDEBUG("GetUserObjectInformation Error", GetLastError());
 	}
 
 	// See if the number of displays has changed
@@ -988,6 +1074,9 @@ DWORD WINAPI kvm_server_mainloop_ex(LPVOID parm)
 	{
 		g_desktop_switch_pending = 0;
 		g_shutdown = 0;
+		g_desktopCheckFailCount = 0;
+		g_lastDesktopName[0] = 0; // Reset desktop name tracking for fresh detection
+		kvm_server_currentDesktopname = 0;
 
 		if (!initialize_gdiplus())
 		{
@@ -1234,7 +1323,12 @@ DWORD WINAPI kvm_server_mainloop_ex(LPVOID parm)
 
 		if (g_desktop_switch_pending)
 		{
-			Sleep(500);
+			// Adaptive wait based on how recently the switch was detected
+			DWORD elapsed = GetTickCount() - g_lastDesktopSwitchTime;
+			int waitTime = (elapsed < 200) ? 150 : 50; // Shorter wait if switch just happened
+			ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1,
+									 "KVM [SLAVE]: Desktop switch pending, waiting %dms before exit", waitTime);
+			Sleep(waitTime);
 		}
 	} while (g_desktop_switch_pending && !g_shutdown);
 
@@ -1296,20 +1390,39 @@ void kvm_relay_ExitHandler(ILibProcessPipe_Process sender, int exitCode, void *u
 	void *reserved = ((void **)user)[1];
 	void *pipeMgr = ((void **)user)[2];
 	char *exePath = (char *)((void **)user)[3];
+	int adaptiveDelay = 100; // Start with shorter delay for faster recovery
 
-	ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "Agent KVM: KVM Child Process(%d) [EXITED]", g_slavekvm);
-	UNREFERENCED_PARAMETER(exitCode);
+	ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1,
+							 "Agent KVM: KVM Child Process(%d) [EXITED] exitCode=%d restartcount=%d", g_slavekvm, exitCode, g_restartcount);
 	UNREFERENCED_PARAMETER(sender);
 
 	g_restartcount++;
-	if (g_restartcount < 20 && g_shutdown == 0)
+
+	// Adaptive delay based on restart count - faster initial retries, slower if repeated failures
+	if (g_restartcount <= 3)
 	{
-		Sleep(1000);
+		adaptiveDelay = 100 + (g_restartcount * 50); // 100ms, 150ms, 200ms for first 3 attempts
+	}
+	else if (g_restartcount <= 10)
+	{
+		adaptiveDelay = 250 + ((g_restartcount - 3) * 100); // 250-950ms for attempts 4-10
+	}
+	else
+	{
+		adaptiveDelay = 1000; // 1 second for later attempts
+	}
+
+	if (g_restartcount < 25 && g_shutdown == 0) // Increased max retries from 20 to 25
+	{
+		ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1,
+								 "Agent KVM: Restarting in %dms (attempt %d)", adaptiveDelay, g_restartcount);
+		Sleep(adaptiveDelay);
 		kvm_relay_restart(1, pipeMgr, exePath, writeHandler, reserved);
 	}
 	else
 	{
-		ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "Agent KVM: g_restartcount = %d, aborting", g_restartcount);
+		ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1,
+								 "Agent KVM: g_restartcount = %d, aborting", g_restartcount);
 		writeHandler(NULL, 0, reserved);
 	}
 }
@@ -1380,6 +1493,9 @@ int kvm_relay_restart(int paused, void *pipeMgr, char *exePath, ILibKVM_WriteHan
 	char *parms0[] = {" -kvm0", g_ILibCrashDump_path != NULL ? "-coredump" : NULL, NULL, NULL};
 	char *parms1[] = {" -kvm1", g_ILibCrashDump_path != NULL ? "-coredump" : NULL, NULL, NULL};
 	void **user = (void **)ILibMemory_Allocate(4 * sizeof(void *), 0, NULL, NULL);
+	HDESK hInputDesk = NULL;
+	char currentDesktopName[64] = {0};
+	int isSecureDesktop = 0;
 
 	if (parms0[1] == NULL)
 	{
@@ -1399,17 +1515,63 @@ int kvm_relay_restart(int paused, void *pipeMgr, char *exePath, ILibKVM_WriteHan
 
 	KVMDEBUG("kvm_relay_restart / start", paused);
 
+	// Probe current input desktop to determine optimal spawn type
+	hInputDesk = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+	if (hInputDesk != NULL)
+	{
+		if (GetUserObjectInformationA(hInputDesk, UOI_NAME, currentDesktopName, sizeof(currentDesktopName) - 1, NULL))
+		{
+			isSecureDesktop = (_stricmp(currentDesktopName, "Winlogon") == 0 ||
+							   _stricmp(currentDesktopName, "Default") != 0);
+			ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1,
+									 "KVM [Master]: Current input desktop is '%s' (isSecureDesktop=%d)", currentDesktopName, isSecureDesktop);
+		}
+		CloseDesktop(hInputDesk);
+	}
+	else
+	{
+		ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1,
+								 "KVM [Master]: Cannot open input desktop (error=%d), assuming secure desktop", GetLastError());
+		isSecureDesktop = 1; // If we can't open it, assume secure desktop
+	}
+
 	// If we are re-launching the child process, wait a bit. The computer may be switching desktop, etc.
 	if (paused == 0)
-		Sleep(500);
+	{
+		int waitTime = isSecureDesktop ? 200 : 100; // Shorter wait, adaptive to desktop type
+		Sleep(waitTime);
+	}
+
 	if (gProcessSpawnType == ILibProcessPipe_SpawnTypes_SPECIFIED_USER && gProcessTSID < 0)
 	{
 		gProcessSpawnType = ILibProcessPipe_SpawnTypes_USER;
 	}
 
-	ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [Master]: Spawning Slave as %s", gProcessSpawnType == ILibProcessPipe_SpawnTypes_USER ? "USER" : "WIN_LOGON");
+	// Override spawn type based on detected desktop
+	if (isSecureDesktop && gProcessSpawnType != ILibProcessPipe_SpawnTypes_WINLOGON)
+	{
+		ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1,
+								 "KVM [Master]: Secure desktop detected, forcing WINLOGON spawn type");
+		gProcessSpawnType = ILibProcessPipe_SpawnTypes_WINLOGON;
+	}
+	else if (!isSecureDesktop && gProcessSpawnType == ILibProcessPipe_SpawnTypes_WINLOGON)
+	{
+		ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1,
+								 "KVM [Master]: User desktop detected, switching to USER spawn type");
+		gProcessSpawnType = (gProcessTSID < 0) ? ILibProcessPipe_SpawnTypes_USER : ILibProcessPipe_SpawnTypes_SPECIFIED_USER;
+	}
+
+	ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1,
+							 "KVM [Master]: Spawning Slave as %s (desktop='%s')",
+							 gProcessSpawnType == ILibProcessPipe_SpawnTypes_USER ? "USER" : (gProcessSpawnType == ILibProcessPipe_SpawnTypes_WINLOGON ? "WINLOGON" : "SPECIFIED_USER"),
+							 currentDesktopName);
+
 	gChildProcess = ILibProcessPipe_Manager_SpawnProcessEx3(pipeMgr, exePath, paused == 0 ? parms0 : parms1, gProcessSpawnType, (void *)(ULONG_PTR)gProcessTSID, 0);
-	gProcessSpawnType = (gProcessSpawnType == ILibProcessPipe_SpawnTypes_SPECIFIED_USER || gProcessSpawnType == ILibProcessPipe_SpawnTypes_USER) ? ILibProcessPipe_SpawnTypes_WINLOGON : (gProcessTSID < 0 ? ILibProcessPipe_SpawnTypes_USER : ILibProcessPipe_SpawnTypes_SPECIFIED_USER);
+
+	// Prepare for next potential switch - toggle the spawn type for next restart
+	gProcessSpawnType = (gProcessSpawnType == ILibProcessPipe_SpawnTypes_SPECIFIED_USER || gProcessSpawnType == ILibProcessPipe_SpawnTypes_USER)
+							? ILibProcessPipe_SpawnTypes_WINLOGON
+							: (gProcessTSID < 0 ? ILibProcessPipe_SpawnTypes_USER : ILibProcessPipe_SpawnTypes_SPECIFIED_USER);
 
 	g_slavekvm = ILibProcessPipe_Process_GetPID(gChildProcess);
 	char tmp[255];
