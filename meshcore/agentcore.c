@@ -3063,7 +3063,8 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 					util_keyhash2(peer, ILibScratchPad2); // Hash the server certificate public key (this is the old way)
 					if (memcmp(ILibScratchPad2, AuthRequest->serverHash, sizeof(AuthRequest->serverHash)) != 0)
 					{
-						printf("Bad server certificate hash\r\n"); // TODO: Disconnect
+						printf("Bad server certificate hash\r\n");
+						ILibWebClient_Disconnect(WebStateObject);
 						if (agent->controlChannelDebug != 0)
 						{
 							ILIBLOGMESSAGEX("Bad server certificate hash");
@@ -3155,8 +3156,9 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 					if (!d2i_X509(&serverCert, (const unsigned char **)&AuthVerify->cert, AuthVerify->certLen))
 					{
 						printf("Invalid server certificate\r\n");
+						ILibWebClient_Disconnect(WebStateObject);
 						break;
-					} // TODO: Disconnect
+					}
 
 					// Check if this certificate public key hash matches what we want
 					X509_pubkey_digest(serverCert, EVP_sha384(), (unsigned char *)ILibScratchPad, (unsigned int *)&hashlen); // OpenSSL 1.1, SHA384
@@ -3166,11 +3168,12 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 						if (memcmp(ILibScratchPad, agent->serverHash, UTIL_SHA256_HASHSIZE) != 0)
 						{
 							printf("Server certificate mismatch\r\n");
-							break; // TODO: Disconnect
 							if (agent->controlChannelDebug != 0)
 							{
 								ILIBLOGMESSAGEX("Server certificate mismatch");
 							}
+							ILibWebClient_Disconnect(WebStateObject);
+							break;
 						}
 					}
 
@@ -3203,7 +3206,7 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 						{
 							ILIBLOGMESSAGEX("Invalid Server Signature");
 						}
-						// TODO: Disconnect
+						ILibWebClient_Disconnect(WebStateObject);
 					}
 
 					RSA_free(rsa_pubkey);
