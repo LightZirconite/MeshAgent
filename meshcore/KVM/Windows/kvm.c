@@ -324,7 +324,7 @@ void kvm_send_display_list(ILibKVM_WriteHandler writeHandler, void *reserved)
 
 void kvm_server_SetResolution();
 int kvm_server_currentDesktopname = 0;
-void CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *reserved)
+int CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *reserved)
 {
 	int x, y, w, h;
 	HDESK desktop = NULL;
@@ -363,7 +363,7 @@ void CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *r
 	if (desktop == NULL)
 	{
 		KVMDEBUG("OpenInputDesktop Error", GetLastError());
-		return;
+		return 0;
 	}
 
 	if (SetThreadDesktop(desktop) == 0)
@@ -472,6 +472,7 @@ void CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *r
 			}
 		}
 	}
+	return 1;
 }
 
 unsigned char g_blockinput = 0;
@@ -1038,7 +1039,11 @@ DWORD WINAPI kvm_server_mainloop_ex(LPVOID parm)
 #endif
 				}
 			}
-			CheckDesktopSwitch(1, writeHandler, reserved);
+			if (CheckDesktopSwitch(1, writeHandler, reserved) == 0)
+			{
+				Sleep(100);
+				continue;
+			}
 			if (g_shutdown)
 				break;
 
