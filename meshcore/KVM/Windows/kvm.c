@@ -363,6 +363,7 @@ void CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *r
 	if (desktop == NULL)
 	{
 		KVMDEBUG("OpenInputDesktop Error", GetLastError());
+		return;
 	}
 
 	if (SetThreadDesktop(desktop) == 0)
@@ -372,10 +373,6 @@ void CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *r
 			KVMDEBUG("CloseDesktop1 Error", 0);
 		}
 		desktop = desktop2;
-	}
-	else
-	{
-		CloseDesktop(desktop2);
 	}
 
 	// Check desktop name switch
@@ -1131,8 +1128,8 @@ DWORD WINAPI kvm_server_mainloop_ex(LPVOID parm)
 					ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: get_desktop_buffer() failed");
 				}
 #endif
-				KVMDEBUG("get_desktop_buffer() failed, restarting...", (int)GetCurrentThreadId());
-				g_desktop_switch_pending = 1;
+				KVMDEBUG("get_desktop_buffer() failed, retrying...", (int)GetCurrentThreadId());
+				Sleep(200);
 			}
 			else
 			{
