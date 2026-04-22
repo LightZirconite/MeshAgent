@@ -30,6 +30,9 @@ limitations under the License.
 #include "microstack/ILibProcessPipe.h"
 #include "microstack/ILibRemoteLogging.h"
 #include <sas.h>
+#ifdef WIN32
+#include "meshcore/audio/audio_relay.h"
+#endif
 
 #if defined(WIN32) && !defined(_WIN32_WCE) && !defined(_MINCORE)
 #define _CRTDBG_MAP_ALLOC
@@ -44,6 +47,12 @@ int gProcessTSID = -1;
 extern int gRemoteMouseRenderDefault;
 int gRemoteMouseMoved = 0;
 extern int gCurrentCursor;
+
+// Adaptive FPS: CPU usage samples between frames
+static ULONGLONG s_cpu_idle_prev  = 0;
+static ULONGLONG s_cpu_total_prev = 0;
+static int       s_cpu_frame_count = 0;
+static int       g_adaptive_fps = 1;  // 1 = auto (default), 0 = fixed by browser
 
 #pragma pack(push, 1)
 typedef struct KVMDebugLog
@@ -643,8 +652,15 @@ int kvm_server_inputdata(char *block, int blocklen, ILibKVM_WriteHandler writeHa
 	case MNG_KVM_FRAME_RATE_TIMER:
 	{
 		int fr = ((int)ntohs(((unsigned short *)(block))[2]));
-		if (fr >= 20 && fr <= 5000)
+		if (fr == 0)
+		{
+			g_adaptive_fps = 1; // Re-enable adaptive FPS (auto mode)
+		}
+		else if (fr >= 16 && fr <= 5000)
+		{
+			g_adaptive_fps = 0; // Fixed mode — browser chose a specific rate
 			FRAME_RATE_TIMER = fr;
+		}
 		break;
 	}
 	case MNG_KVM_INIT_TOUCH:
@@ -713,6 +729,20 @@ int kvm_server_inputdata(char *block, int blocklen, ILibKVM_WriteHandler writeHa
 			SCREEN_SEL_TARGET = 0;
 		else
 			SCREEN_SEL_TARGET = x;
+		break;
+	}
+	case MNG_AUDIO_START:
+	{
+#ifdef WIN32
+		audio_relay_setup(writeHandler, reserved, NULL);
+#endif
+		break;
+	}
+	case MNG_AUDIO_STOP:
+	{
+#ifdef WIN32
+		audio_relay_stop();
+#endif
 		break;
 	}
 	}
@@ -1108,11 +1138,15 @@ DWORD WINAPI kvm_server_mainloop_ex(LPVOID parm)
 #ifdef _WINSERVICE
 			if (!kvmConsoleMode)
 			{
-				ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: get_desktop_buffer() failed");
+				ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: get_desktop_buffer() failed, skipping frame");
 			}
 #endif
-			KVMDEBUG("get_desktop_buffer() failed, shutting down", (int)GetCurrentThreadId());
-			g_shutdown = 1;
+			KVMDEBUG("get_desktop_buffer() failed, skipping frame", (int)GetCurrentThreadId());
+			// Don't kill the KVM process on capture failure (e.g. multi-monitor BitBlt issue).
+			// Just free the buffer and skip this frame so the user can switch back to a working display.
+			if (desktop) { free(desktop); desktop = NULL; }
+			Sleep(FRAME_RATE_TIMER);
+			continue;
 		}
 		else
 		{
@@ -1127,7 +1161,7 @@ DWORD WINAPI kvm_server_mainloop_ex(LPVOID parm)
 					while (!g_shutdown && (g_pause))
 					{
 						Sleep(50); /*printf(".");*/
-					} // If the socket is in pause state, wait here. //ToDo: YLIAN!!!!
+					}			   // If the socket is in pause state, wait here. //ToDo: YLIAN!!!!
 
 					if (g_shutdown || SCALING_FACTOR != SCALING_FACTOR_NEW)
 					{
@@ -1179,6 +1213,32 @@ DWORD WINAPI kvm_server_mainloop_ex(LPVOID parm)
 
 		KVMDEBUG("kvm_server_mainloop / loop3", (int)GetCurrentThreadId());
 
+		// Adaptive FPS: measure CPU every 15 frames, only when not in fixed mode.
+		// Minimum guaranteed: 30fps (33ms). Maximum: 60fps (16ms).
+		if (g_adaptive_fps && ++s_cpu_frame_count >= 15)
+		{
+			s_cpu_frame_count = 0;
+			FILETIME idle, kernel, user;
+			if (GetSystemTimes(&idle, &kernel, &user))
+			{
+				ULONGLONG fi    = ((ULONGLONG)idle.dwHighDateTime   << 32) | idle.dwLowDateTime;
+				ULONGLONG fk    = ((ULONGLONG)kernel.dwHighDateTime << 32) | kernel.dwLowDateTime;
+				ULONGLONG fu    = ((ULONGLONG)user.dwHighDateTime   << 32) | user.dwLowDateTime;
+				ULONGLONG total = fk + fu;
+				if (s_cpu_total_prev > 0 && total > s_cpu_total_prev)
+				{
+					ULONGLONG idleDiff  = fi    - s_cpu_idle_prev;
+					ULONGLONG totalDiff = total - s_cpu_total_prev;
+					int cpu = (totalDiff > 0) ? (int)(100 - idleDiff * 100 / totalDiff) : 0;
+					if      (cpu < 40) FRAME_RATE_TIMER = 16;  // ~60fps
+					else if (cpu < 60) FRAME_RATE_TIMER = 22;  // ~45fps
+					else               FRAME_RATE_TIMER = 33;  // ~30fps (minimum — never below)
+				}
+				s_cpu_idle_prev  = fi;
+				s_cpu_total_prev = total;
+			}
+		}
+
 		// We can't go full speed here, we need to slow this down.
 		height = FRAME_RATE_TIMER;
 		while (!g_shutdown && height > 0)
@@ -1208,6 +1268,9 @@ DWORD WINAPI kvm_server_mainloop_ex(LPVOID parm)
 		tileInfo = NULL;
 	}
 	KVMDEBUG("kvm_server_mainloop / end1", (int)GetCurrentThreadId());
+#ifdef WIN32
+	audio_relay_stop(); // Stop any running desktop audio capture
+#endif
 	teardown_gdiplus();
 
 	KVMDEBUG("kvm_server_mainloop / end", (int)GetCurrentThreadId());

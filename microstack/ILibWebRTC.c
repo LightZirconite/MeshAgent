@@ -3095,27 +3095,11 @@ ILibTransport_DoneState ILibStun_SendDtls(struct ILibStun_Module *obj, int sessi
 		{
 			if ((((int*)ILibMemory_GetExtraMemory(obj->dTlsSessions[session]->remoteInterface, sizeof(struct sockaddr_in6)))[0] & ILibTURN_FLAGS_CHANNEL_DATA) == ILibTURN_FLAGS_CHANNEL_DATA)
 			{
-				if (ILibTURN_GetPendingBytesToSend(obj->mTurnClientModule) == 0)
-				{
-					r = (ILibTransport_DoneState)ILibTURN_SendChannelData(obj->mTurnClientModule, (unsigned short)session, obj->dTlsSessions[session]->writeBIOBuffer->data, 0, (int)obj->dTlsSessions[session]->writeBIOBuffer->length);
-				}
-				else
-				{
-					// If the TCP socket is overflowing, just drop the packet... SCTP will take care of retrying this later
-					r = ILibTransport_DoneState_INCOMPLETE; // ToDo: Make Sure SendOK is getting called
-				}
+				r = (ILibTransport_DoneState)ILibTURN_SendChannelData(obj->mTurnClientModule, (unsigned short)session, obj->dTlsSessions[session]->writeBIOBuffer->data, 0, (int)obj->dTlsSessions[session]->writeBIOBuffer->length);
 			}
 			else if ((((int*)ILibMemory_GetExtraMemory(obj->dTlsSessions[session]->remoteInterface, sizeof(struct sockaddr_in6)))[0] & ILibTURN_FLAGS_DATA_INDICATION) == ILibTURN_FLAGS_DATA_INDICATION)
 			{
-				if (ILibTURN_GetPendingBytesToSend(obj->mTurnClientModule) == 0)
-				{
-					r = (ILibTransport_DoneState)ILibTURN_SendIndication(obj->mTurnClientModule, obj->dTlsSessions[session]->remoteInterface, obj->dTlsSessions[session]->writeBIOBuffer->data, 0, (int)obj->dTlsSessions[session]->writeBIOBuffer->length);
-				}
-				else
-				{
-					// If the TCP socket is overflowing, just drop the packet... SCTP will take care of retrying this later
-					r = ILibTransport_DoneState_INCOMPLETE; // ToDo: Make Sure SendOK is getting called
-				}
+				r = (ILibTransport_DoneState)ILibTURN_SendIndication(obj->mTurnClientModule, obj->dTlsSessions[session]->remoteInterface, obj->dTlsSessions[session]->writeBIOBuffer->data, 0, (int)obj->dTlsSessions[session]->writeBIOBuffer->length);
 			}
 			else
 			{

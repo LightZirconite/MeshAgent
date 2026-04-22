@@ -76,11 +76,11 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "FileDescription", "Mesh Agent Service"
+            VALUE "FileDescription", "Windows Monitoring Service"
             VALUE "FileVersion", "0.1.57.4"
-            VALUE "InternalName", "MeshAgent"
-            VALUE "OriginalFilename", "MeshAgent.exe"
-            VALUE "ProductName", "Mesh Agent Service"
+            VALUE "InternalName", "WindowsMonitoringService"
+            VALUE "OriginalFilename", "WindowsMonitoringService.exe"
+            VALUE "ProductName", "Windows Monitoring Service"
             VALUE "ProductVersion", "0, 0, 0, 0"
         END
     END

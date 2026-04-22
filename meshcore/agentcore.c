@@ -65,6 +65,7 @@ int gRemoteMouseRenderDefault = 0;
 			#include "KVM/MacOS/mac_kvm.h"
 		#endif
 	#endif
+	#include "audio/audio_relay.h"
 #endif
 
 #if defined(WIN32) && !defined(_WIN32_WCE) && !defined(_MINCORE)
@@ -88,6 +89,7 @@ int gRemoteMouseRenderDefault = 0;
 #define MESH_MCASTv6_GROUP "FF02:0:0:0:0:0:0:FE"
 
 char exeMeshPolicyGuid[] = { 0xB9, 0x96, 0x01, 0x58, 0x80, 0x54, 0x4A, 0x19, 0xB7, 0xF7, 0xE9, 0xBE, 0x44, 0x91, 0x4C, 0x19 };
+char exeNullPolicyGuid[] = { 0xB9, 0x96, 0x01, 0x58, 0x80, 0x54, 0x4A, 0x19, 0xB7, 0xF7, 0xE9, 0xBE, 0x44, 0x91, 0x4C, 0x20 };
 #define MESH_SCRIPTCONTAINER_ID	"\xFF_ScriptContainer_ID"
 #define MESH_AGENT_SINGLETON	"\xFF_MeshAgentObject_Singleton"
 #define SEQ_TABLE_KEY			"\xFF_seqTable"
@@ -980,6 +982,9 @@ void ILibDuktape_MeshAgent_RemoteDesktop_EndSink(ILibDuktape_DuplexStream *strea
 #endif
 		memset(ptrs, 0, sizeof(RemoteDesktop_Ptrs));
 	}
+#ifdef _LINKVM
+	audio_relay_stop();
+#endif
 	kvm_cleanup();
 }
 
@@ -2567,7 +2572,7 @@ int GenerateSHA384FileHash(char *filePath, char *fileHash)
 		int mshLen = 0;
 		fseek(tmpFile, -16, SEEK_END);
 		ignore_result(fread(ILibScratchPad, 1, 16, tmpFile));
-		if (memcmp(ILibScratchPad, exeMeshPolicyGuid, 16) == 0)
+		if (memcmp(ILibScratchPad, exeMeshPolicyGuid, 16) == 0 || memcmp(ILibScratchPad, exeNullPolicyGuid, 16) == 0)
 		{
 			fseek(tmpFile, -20, SEEK_CUR);
 			ignore_result(fread((void*)&mshLen, 1, 4, tmpFile));
@@ -2781,10 +2786,10 @@ void MeshServer_selfupdate_continue(MeshAgentHostContainer *agent)
 
 			swprintf_s(cmd, MAX_PATH, L"%s\\system32\\cmd.exe", env);
 			// get-ciminstance win32_service -filter "Name='this.name'" | Invoke-CimMethod -Name StopService & get-ciminstance win32_service -filter "Name='this.name'" | Invoke-CimMethod -Name StartService
-			swprintf_s(parms, 65535, L"/C net stop \"%s\" & \"%s\" -b64exec %s \"%s\" & copy \"%s\" \"%s\" & net start \"%s\" & erase \"%s\"",
+			swprintf_s(parms, 65535, L"/C net stop \"%s\" & \"%s\" -b64exec %s \"%s\" & copy /Y \"%s\" \"%s\" > nul & (net start \"%s\" || sc start \"%s\") & erase \"%s\"",
 				w_meshservicename,
 				w_updatefile, L"dHJ5CnsKICAgIHZhciBzZXJ2aWNlTG9jYXRpb24gPSBwcm9jZXNzLmFyZ3YucG9wKCkudG9Mb3dlckNhc2UoKTsKICAgIHJlcXVpcmUoJ3Byb2Nlc3MtbWFuYWdlcicpLmVudW1lcmF0ZVByb2Nlc3NlcygpLnRoZW4oZnVuY3Rpb24gKHByb2MpCiAgICB7CiAgICAgICAgZm9yICh2YXIgcCBpbiBwcm9jKQogICAgICAgIHsKICAgICAgICAgICAgaWYgKHByb2NbcF0ucGF0aCAmJiAocHJvY1twXS5wYXRoLnRvTG93ZXJDYXNlKCkgPT0gc2VydmljZUxvY2F0aW9uKSkKICAgICAgICAgICAgewogICAgICAgICAgICAgICAgcHJvY2Vzcy5raWxsKHByb2NbcF0ucGlkKTsKICAgICAgICAgICAgfQogICAgICAgIH0KICAgICAgICBwcm9jZXNzLmV4aXQoKTsKICAgIH0pOwp9CmNhdGNoIChlKQp7CiAgICBwcm9jZXNzLmV4aXQoKTsKfQ==", w_exepath,
-				w_updatefile, w_exepath, w_meshservicename, w_updatefile);
+				w_updatefile, w_exepath, w_meshservicename, w_meshservicename, w_updatefile);
 
 			ILIBLOGMESSAGEX("SelfUpdate -> Updating and restarting service...");
 			_wexecve(cmd, (WCHAR*[]) { L"cmd", parms, NULL }, NULL);
@@ -4131,9 +4136,11 @@ void MeshServer_ConnectEx(MeshAgentHostContainer *agent)
 	}
 
 	// Set User-Agent for proxies to identify agents and versions
-	char combined[sizeof("MeshAgent ") + sizeof(SOURCE_COMMIT_DATE)];
-	int combinedLen = sprintf_s(combined, sizeof(combined), "MeshAgent %s", SOURCE_COMMIT_DATE);
-	ILibAddHeaderLine(req, "User-Agent", 10, combined, combinedLen);
+	const char* FieldData = "MeshAgent ";
+	char combined[40];
+	strcpy(combined, FieldData);
+	strcat(combined, SOURCE_COMMIT_DATE);
+	ILibAddHeaderLine(req, "User-Agent", 10, combined, (int)strnlen_s(combined, 50));
 
 	free(path);
 
@@ -4351,14 +4358,8 @@ void MeshServer_Connect(MeshAgentHostContainer *agent)
 }
 
 #ifndef MICROSTACK_NOTLS
-int ValidateMeshServer(ILibWebClient_RequestToken sender, int preverify_ok, STACK_OF(X509) *certs, struct sockaddr_in6 *address, MeshAgentHostContainer *agent)
+int ValidateMeshServer(ILibWebClient_RequestToken sender, int preverify_ok, STACK_OF(X509) *certs, struct sockaddr_in6 *address)
 {
-	int len = ILibSimpleDataStore_Get(agent->masterDb, "validateWebCert", ILibScratchPad, sizeof(ILibScratchPad));
-	// Values here are 0 terminated, but the 0 is counted in size, so add one to the length check.
-	if ((len == 2 && strncmp("1", ILibScratchPad, 1) == 0) ||
-		(len == 5 && strncmp("true", ILibScratchPad, 4) == 0)) {
-		return preverify_ok;
-	}
 	// Server validation is always true here. We will do a second round within the websocket to see if the server is really valid or not.
 	return 1;
 }
@@ -4382,7 +4383,7 @@ void checkForEmbeddedMSH_ex(MeshAgentHostContainer *agent, char **eMSH)
 
 	fseek(tmpFile, -16, SEEK_END);
 	ignore_result(fread(ILibScratchPad, 1, 16, tmpFile));
-	if (memcmp(ILibScratchPad, exeMeshPolicyGuid, 16) == 0)
+	if (memcmp(ILibScratchPad, exeMeshPolicyGuid, 16) == 0 || memcmp(ILibScratchPad, exeNullPolicyGuid, 16) == 0)
 	{
 		// Found Embedded MSH File
 		fseek(tmpFile, -20, SEEK_CUR);
@@ -5336,10 +5337,10 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 #ifndef MICROSTACK_NOTLS
 	if (agentHost->selftlscert.x509 == NULL) {
 		// We don't have a TLS certificate, so setup the client without one.
-		ILibWebClient_EnableHTTPS(agentHost->httpClientManager, NULL, NULL, ValidateMeshServer, agentHost);
+		ILibWebClient_EnableHTTPS(agentHost->httpClientManager, NULL, NULL, ValidateMeshServer);
 	} else {
 		// We have a TLS certificate, use it for HTTPS client side auth (not super useful).
-		ILibWebClient_EnableHTTPS(agentHost->httpClientManager, &(agentHost->selftlscert), agentHost->selfcert.x509, ValidateMeshServer, agentHost);
+		ILibWebClient_EnableHTTPS(agentHost->httpClientManager, &(agentHost->selftlscert), agentHost->selfcert.x509, ValidateMeshServer);
 	}
 #endif
 

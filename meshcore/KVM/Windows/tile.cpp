@@ -1,4 +1,4 @@
-/*   
+/*
 Copyright 2006 - 2022 Intel Corporation
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -102,7 +102,7 @@ int GetEncoderClsid(const WCHAR* format, CLSID* pClsid)
 }
 
 // Adjusts the screen size(width or height) to be exactly divisible by TILE_WIDTH
-int adjust_screen_size(int pixles) 
+int adjust_screen_size(int pixles)
 {
 	int extra = pixles % TILE_WIDTH; // Assuming tile width and height will remain the same.
 	if (extra != 0) return pixles + TILE_WIDTH - extra;
@@ -110,7 +110,7 @@ int adjust_screen_size(int pixles)
 }
 
 // Extracts the required tile buffer from the desktop buffer
-int get_tile_buffer(int x, int y, void **buffer, void *desktop, int tilewidth, int tileheight) 
+int get_tile_buffer(int x, int y, void **buffer, void *desktop, int tilewidth, int tileheight)
 {
 	void *target = *buffer;
 	for (int height = adjust_screen_size(SCALED_HEIGHT) - y - tileheight; height < adjust_screen_size(SCALED_HEIGHT) - y; height++)
@@ -121,7 +121,7 @@ int get_tile_buffer(int x, int y, void **buffer, void *desktop, int tilewidth, i
 	return 0;
 }
 
-int tile_crc(int x, int y, void *desktop, int tilewidth, int tileheight) 
+int tile_crc(int x, int y, void *desktop, int tilewidth, int tileheight)
 {
 	int crc = 0;
 	for (int height = adjust_screen_size(SCALED_HEIGHT) - y - tileheight; height < adjust_screen_size(SCALED_HEIGHT) - y; height++)
@@ -132,7 +132,7 @@ int tile_crc(int x, int y, void *desktop, int tilewidth, int tileheight)
 }
 
 // This function returns 0 and *buffer != NULL if everything was good. retval = jpegsize if the captured image was too large.
-int calc_opt_compr_send(int x, int y, int captureWidth, int captureHeight, void* desktop, void ** buffer, long long *bufferSize) 
+int calc_opt_compr_send(int x, int y, int captureWidth, int captureHeight, void* desktop, void ** buffer, long long *bufferSize)
 {
 	BITMAPINFO bmpInfo;
 	LARGE_INTEGER Offset;
@@ -223,7 +223,7 @@ int calc_opt_compr_send(int x, int y, int captureWidth, int captureHeight, void*
 		jpegStream->Release();
 		ILibCriticalLog(NULL, __FILE__, __LINE__, 252, GetLastError());
 		return 0;
-	}       
+	}
 
 	// Move the image stream's pointer to its beginning.
 	Offset.QuadPart = 0;
@@ -235,7 +235,7 @@ int calc_opt_compr_send(int x, int y, int captureWidth, int captureHeight, void*
 		jpegStream->Release();
 		ILibCriticalLog(NULL, __FILE__, __LINE__, 252, GetLastError());
 		return 0;
-	}        
+	}
 
 	// Check if the tile is too large to send
 	DWORD jpegSize = (DWORD)Size.QuadPart;
@@ -297,7 +297,7 @@ extern "C"
 
 //Fetches the encoded jpeg tile at the given location. The neighboring tiles are coalesed to form a larger jpeg before returning.
 int get_tile_at(int x, int y, void** buffer, long long *bufferSize, void *desktop, int row, int col)
-{	
+{
 	int CRC;
 	int rightcol = col;		// Used in coalescing. Indicates the right-most column to be coalesced.
 	int botrow = row;		// Used in coalescing. Indicates the bottom-most row to be coalesced.
@@ -310,7 +310,7 @@ int get_tile_at(int x, int y, void** buffer, long long *bufferSize, void *deskto
 	*bufferSize = 0;
 
 	if (tileInfo[row][col].flags == (char)TILE_TODO) // First check whether the tile-crc needs to be calcualted or not.
-	{ 
+	{
 		// Compute CRC on the contents of the bitmap; Proceed with image encoding only if the CRC is different.
 		if ((CRC = tile_crc(x, y, desktop, TILE_WIDTH, TILE_HEIGHT)) == tileInfo[row][col].crc) return 0;
 		tileInfo[row][col].crc = CRC; // Update the tile CRC in the global data structure.
@@ -326,7 +326,7 @@ int get_tile_at(int x, int y, void** buffer, long long *bufferSize, void *deskto
 	{
 		rightcol++;
 		r_x = rightcol * TILE_WIDTH;
-		
+
 		CRC = tileInfo[row][rightcol].crc;
 
 		if (tileInfo[row][rightcol].flags == (char)TILE_TODO) {
@@ -336,9 +336,9 @@ int get_tile_at(int x, int y, void** buffer, long long *bufferSize, void *deskto
 
 		if (CRC != tileInfo[row][rightcol].crc || tileInfo[row][rightcol].flags == (char)TILE_MARKED_NOT_SENT) // If the tile has changed, increment the capturewidth.
 		{
-			tileInfo[row][rightcol].crc = CRC; 
+			tileInfo[row][rightcol].crc = CRC;
 			// Here we check whether the size of the coalesced bitmap is greater than the threshold (65500)
-			//if ((captureWidth + TILE_WIDTH) * TILE_HEIGHT * PIXEL_SIZE / COMPRESSION_RATIO > 65500) { 
+			//if ((captureWidth + TILE_WIDTH) * TILE_HEIGHT * PIXEL_SIZE / COMPRESSION_RATIO > 65500) {
 			//	tileInfo[row][rightcol].flags = (char)TILE_MARKED_NOT_SENT;
 			//	--rightcol;
 			//	break;
@@ -346,7 +346,7 @@ int get_tile_at(int x, int y, void** buffer, long long *bufferSize, void *deskto
 
 			tileInfo[row][rightcol].flags = (char)TILE_MARKED_NOT_SENT;
 			captureWidth += TILE_WIDTH;
-		} 
+		}
 		else
 		{
 			tileInfo[row][rightcol].flags = (char)TILE_DONT_SEND;
@@ -393,7 +393,7 @@ int get_tile_at(int x, int y, void** buffer, long long *bufferSize, void *deskto
 					for (int i = col; i < rcol; i++) {
 						if (tileInfo[botrow][i].flags == (char)TILE_SKIPPED) {
 							tileInfo[botrow][i].flags = (char)TILE_DONT_SEND;
-						} 
+						}
 						else {
 							tileInfo[botrow][i].flags = (char)TILE_MARKED_NOT_SENT;
 						}
@@ -447,7 +447,7 @@ int get_tile_at(int x, int y, void** buffer, long long *bufferSize, void *deskto
 			}
 
 			if (botrow > row) // First time, try reducing the height.
-			{ 
+			{
 				botrow = row + ((botrow - row + 1) / 2);
 				captureHeight = (botrow - row + 1) * TILE_HEIGHT;
 			}
@@ -455,7 +455,7 @@ int get_tile_at(int x, int y, void** buffer, long long *bufferSize, void *deskto
 			{
 				rightcol = col + ((rightcol - col + 1) / 2);
 				captureWidth = (rightcol - col + 1) * TILE_WIDTH;
-			} 
+			}
 			else
 			{   // This never happens, but just in case.
 				retval = 0;
@@ -487,13 +487,13 @@ int get_desktop_buffer(void **buffer, long long *bufferSize, long* mouseMove)
 
 	if (hDesktopDC) ReleaseDC(NULL, hDesktopDC);
 	if ((hDesktopDC = GetDC(NULL)) == NULL) { KVMDEBUG("GetDC(NULL) returned NULL", 0); return 1; } // We need to do this incase the current desktop changes.
-	if (hCapturedBitmap) DeleteObject(hCapturedBitmap);	
+	if (hCapturedBitmap) DeleteObject(hCapturedBitmap);
 	if ((hCapturedBitmap = CreateCompatibleBitmap(hDesktopDC, adjust_screen_size(SCALED_WIDTH), adjust_screen_size(SCALED_HEIGHT))) == NULL)
 	{
 		KVMDEBUG("CreateCompatibleBitmap() returned NULL", 0);
 		return 1;
 	}
-	
+
 	if (SelectObject(hCaptureDC, hCapturedBitmap) == NULL) { KVMDEBUG("SelectObject() failed", 0); return(1); }
 	if (SCALING_FACTOR == 1024)
 	{
@@ -562,7 +562,7 @@ int get_desktop_buffer(void **buffer, long long *bufferSize, long* mouseMove)
 	*bufferSize = bmpInfo.bmiHeader.biSizeImage;
 	PIXEL_SIZE = bmpInfo.bmiHeader.biBitCount / 8;
 	if ((*buffer = malloc((size_t)*bufferSize)) == NULL) { KVMDEBUG("malloc() failed", 0); return 1; }
-	
+
 	bmpInfo.bmiHeader.biCompression = BI_RGB;
 	if (GetDIBits(hDesktopDC, hCapturedBitmap, 0, bmpInfo.bmiHeader.biHeight, *buffer, &bmpInfo, DIB_RGB_COLORS) == 0) { KVMDEBUG("GetDIBits() failed", 0); free(*buffer); return(1); }
 
@@ -604,7 +604,7 @@ short initialize_gdiplus()
 	if ((hCaptureDC = CreateCompatibleDC(hDesktopDC)) == NULL) { KVMDEBUG("CreateCompatibleDC() failed", 0); return 0; }
 	if ((hCapturedBitmap = CreateCompatibleBitmap(hDesktopDC, SCALED_WIDTH, SCALED_HEIGHT)) == NULL) { KVMDEBUG("CreateCompatibleBitmap() failed", 0); return 0; }
 	if (SelectObject(hCaptureDC, hCapturedBitmap) == NULL) { KVMDEBUG("SelectObject() failed", 0); }
-	
+
 	// Find encoder and setup encoder parameters
 	GetEncoderClsid(L"image/jpeg", &encoderClsid);
 	encParam.Count = 1;

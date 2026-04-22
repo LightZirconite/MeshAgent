@@ -612,8 +612,8 @@ int kvm_init(int displayNo)
 	}
 
 	// Some magic numbers.
-	TILE_WIDTH = 32;
-	TILE_HEIGHT = 32;
+	TILE_WIDTH = 64;
+	TILE_HEIGHT = 64;
 	COMPRESSION_RATIO = 50;
 	FRAME_RATE_TIMER = 100;
 
@@ -964,7 +964,8 @@ void* kvm_server_mainloop(void* parm)
 	void *desktop = NULL;
 	XImage *image = NULL;
 	eventdisplay = NULL;
-	Display *imagedisplay = NULL, *cursordisplay = NULL;
+	static Display *imagedisplay = NULL;
+	Display *cursordisplay = NULL;
 	void *buf = NULL;
 	int event_base = 0, error_base = 0, cursor_descriptor = -1;
 	int kbevent_base = 0;
@@ -1036,8 +1037,13 @@ void* kvm_server_mainloop(void* parm)
 		CheckDesktopSwitch(1);
 		//fprintf(logFile, "After CheckDesktopSwitch.\n"); fflush(logFile);
 
-		imagedisplay = x11_exports->XOpenDisplay(CURRENT_XDISPLAY);
-		if (imagedisplay == NULL) { g_shutdown = 1; break; }
+		// Reopen imagedisplay only when display changed or connection was lost
+		if (imagedisplay == NULL || change_display)
+		{
+			if (imagedisplay != NULL) { x11_exports->XCloseDisplay(imagedisplay); imagedisplay = NULL; }
+			imagedisplay = x11_exports->XOpenDisplay(CURRENT_XDISPLAY);
+			if (imagedisplay == NULL) { g_shutdown = 1; break; }
+		}
 
 		if (DisplayWidth(imagedisplay, CURRENT_DISPLAY_ID) != SCREEN_WIDTH ||
 			DisplayHeight(imagedisplay, CURRENT_DISPLAY_ID) != SCREEN_HEIGHT ||
@@ -1194,16 +1200,25 @@ void* kvm_server_mainloop(void* parm)
 		}
 
 		image = x11ext_exports->XShmCreateImage(imagedisplay,
-			DefaultVisual(imagedisplay, SCREEN_NUM), // Use a correct visual. Omitted for brevity     
+			DefaultVisual(imagedisplay, SCREEN_NUM), // Use a correct visual. Omitted for brevity
 			SCREEN_DEPTH,
 			ZPixmap, NULL, &shminfo, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+		// If XShmCreateImage fails, force-reopen the display connection next frame
+		if (image == NULL)
+		{
+			x11_exports->XCloseDisplay(imagedisplay);
+			imagedisplay = NULL;
+			continue;
+		}
+
 		shminfo.shmid = shmget(IPC_PRIVATE,
 			image->bytes_per_line * image->height,
 			IPC_CREAT | 0777);
 		shminfo.shmaddr = image->data = shmat(shminfo.shmid, 0, 0);
 		shminfo.readOnly = False;
 		x11ext_exports->XShmAttach(imagedisplay, &shminfo);
-		
+
 		x11ext_exports->XShmGetImage(imagedisplay,
 			RootWindowOfScreen(ScreenOfDisplay(imagedisplay, CURRENT_DISPLAY_ID)),
 			image,
@@ -1303,12 +1318,8 @@ void* kvm_server_mainloop(void* parm)
 		XDestroyImage(image); image = NULL;
 		shmdt(shminfo.shmaddr);
 		shmctl(shminfo.shmid, IPC_RMID, 0);
-		
-		if (imagedisplay != NULL) 
-		{
-			x11_exports->XCloseDisplay(imagedisplay);
-			imagedisplay = NULL;
-		}
+		// imagedisplay is kept persistent across frames for performance.
+		// It is closed only on display change or shutdown.
 
 		// We can't go full speed here, we need to slow this down.
 		height = FRAME_RATE_TIMER;
@@ -1345,6 +1356,12 @@ void* kvm_server_mainloop(void* parm)
 	{
 		x11_exports->XCloseDisplay(cursordisplay);
 		cursordisplay = NULL;
+	}
+
+	if (imagedisplay != NULL)
+	{
+		x11_exports->XCloseDisplay(imagedisplay);
+		imagedisplay = NULL;
 	}
 
 	if (g_tileInfo != NULL)

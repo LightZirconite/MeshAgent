@@ -65,6 +65,9 @@ int KVM_SEND(char *buffer, int bufferLen)
 
 
 CGDirectDisplayID SCREEN_NUM = 0;
+int SCREEN_SEL = 0;  // 0 = all/primary, 1..N = specific monitor
+CGDirectDisplayID g_displayIDs[8];
+uint32_t g_displayCount = 0;
 int SH_HANDLE = 0;
 int SCREEN_WIDTH = 0;
 int SCREEN_HEIGHT = 0;
@@ -135,7 +138,67 @@ void kvm_send_resolution()
 	ILibQueue_UnLock(g_messageQ);
 }
 
-#define BUFSIZE 65535
+void kvm_send_display_list()
+{
+	uint32_t i;
+	CGDirectDisplayID displays[8];
+	uint32_t displayCount = 0;
+	CGGetActiveDisplayList(8, displays, &displayCount);
+	g_displayCount = displayCount;
+	memcpy(g_displayIDs, displays, displayCount * sizeof(CGDirectDisplayID));
+
+	// Send MNG_KVM_DISPLAY_INFO: per-monitor position and size
+	int infoSize = 4 + (int)displayCount * 10;
+	char *info_buf = ILibMemory_SmartAllocate(infoSize);
+	((unsigned short*)info_buf)[0] = (unsigned short)htons((unsigned short)MNG_KVM_DISPLAY_INFO);
+	((unsigned short*)info_buf)[1] = (unsigned short)htons((unsigned short)infoSize);
+	for (i = 0; i < displayCount; i++)
+	{
+		int offset = 2 + (5 * (int)i);
+		CGRect bounds = CGDisplayBounds(displays[i]);
+		((unsigned short*)info_buf)[offset]     = (unsigned short)htons((unsigned short)(i + 1));
+		((unsigned short*)info_buf)[offset + 1] = (unsigned short)htons((unsigned short)((int)bounds.origin.x));
+		((unsigned short*)info_buf)[offset + 2] = (unsigned short)htons((unsigned short)((int)bounds.origin.y));
+		((unsigned short*)info_buf)[offset + 3] = (unsigned short)htons((unsigned short)(CGDisplayPixelsWide(displays[i])));
+		((unsigned short*)info_buf)[offset + 4] = (unsigned short)htons((unsigned short)(CGDisplayPixelsHigh(displays[i])));
+	}
+	ILibQueue_Lock(g_messageQ);
+	ILibQueue_EnQueue(g_messageQ, info_buf);
+	ILibQueue_UnLock(g_messageQ);
+
+	// Send MNG_KVM_GET_DISPLAYS: list of selectable display IDs + currently selected
+	if (displayCount <= 1)
+	{
+		char *buf = ILibMemory_SmartAllocate(8);
+		((unsigned short*)buf)[0] = (unsigned short)htons((unsigned short)MNG_KVM_GET_DISPLAYS);
+		((unsigned short*)buf)[1] = (unsigned short)htons((unsigned short)8);
+		((unsigned short*)buf)[2] = 0;
+		((unsigned short*)buf)[3] = 0;
+		ILibQueue_Lock(g_messageQ);
+		ILibQueue_EnQueue(g_messageQ, buf);
+		ILibQueue_UnLock(g_messageQ);
+	}
+	else
+	{
+		int bufSize = 10 + (2 * (int)displayCount);
+		char *buf = ILibMemory_SmartAllocate(bufSize);
+		((unsigned short*)buf)[0] = (unsigned short)htons((unsigned short)MNG_KVM_GET_DISPLAYS);
+		((unsigned short*)buf)[1] = (unsigned short)htons((unsigned short)bufSize);
+		((unsigned short*)buf)[2] = (unsigned short)htons((unsigned short)(displayCount + 1));
+		((unsigned short*)buf)[3] = (unsigned short)htons((unsigned short)0xFFFF); // ALL option
+		for (i = 0; i < displayCount; i++)
+		{
+			((unsigned short*)buf)[4 + i] = (unsigned short)htons((unsigned short)(i + 1));
+		}
+		// Currently selected screen
+		((unsigned short*)buf)[4 + i] = (SCREEN_SEL == 0)
+			? (unsigned short)htons((unsigned short)0xFFFF)
+			: (unsigned short)htons((unsigned short)SCREEN_SEL);
+		ILibQueue_Lock(g_messageQ);
+		ILibQueue_EnQueue(g_messageQ, buf);
+		ILibQueue_UnLock(g_messageQ);
+	}
+}
 
 int set_kbd_state(int input_state)
 {
@@ -275,6 +338,16 @@ int kvm_init()
 	int old_height_count = TILE_HEIGHT_COUNT;
 	
 	SCREEN_NUM = CGMainDisplayID();
+	// Select the requested display if multiple monitors are present
+	{
+		CGDirectDisplayID tmpDisplays[8];
+		uint32_t tmpCount = 0;
+		CGGetActiveDisplayList(8, tmpDisplays, &tmpCount);
+		g_displayCount = tmpCount;
+		memcpy(g_displayIDs, tmpDisplays, tmpCount * sizeof(CGDirectDisplayID));
+		if (SCREEN_SEL > 0 && SCREEN_SEL <= (int)tmpCount)
+			SCREEN_NUM = tmpDisplays[SCREEN_SEL - 1];
+	}
 	
 	if (SCREEN_WIDTH > 0)
 	{
@@ -286,10 +359,10 @@ int kvm_init()
 	SCREEN_HEIGHT = CGDisplayPixelsHigh(SCREEN_NUM) * SCREEN_SCALE;
 	SCREEN_WIDTH = CGDisplayPixelsWide(SCREEN_NUM) * SCREEN_SCALE;
 	// Some magic numbers.
-	TILE_WIDTH = 32;
-	TILE_HEIGHT = 32;
+	TILE_WIDTH = 64;
+	TILE_HEIGHT = 64;
 	COMPRESSION_RATIO = 50;
-	FRAME_RATE_TIMER = 100;
+	FRAME_RATE_TIMER = 50;
 	
 	TILE_HEIGHT_COUNT = SCREEN_HEIGHT / TILE_HEIGHT;
 	TILE_WIDTH_COUNT = SCREEN_WIDTH / TILE_WIDTH;
@@ -297,6 +370,7 @@ int kvm_init()
 	if (SCREEN_HEIGHT % TILE_HEIGHT) { TILE_HEIGHT_COUNT++; }
 	
 	kvm_send_resolution();
+	kvm_send_display_list();
 	reset_tile_info(old_height_count);
 	
 	unsigned char *buffer = ILibMemory_SmartAllocate(5);
@@ -393,6 +467,19 @@ int kvm_server_inputdata(char* block, int blocklen)
 		{
 			//int fr = ((int)ntohs(((unsigned short*)(block))[2]));
 			//if (fr > 20 && fr < 2000) FRAME_RATE_TIMER = fr;
+			break;
+		}
+		case MNG_KVM_GET_DISPLAYS:
+		{
+			kvm_send_display_list();
+			break;
+		}
+		case MNG_KVM_SET_DISPLAY:
+		{
+			if (size != 6) break;
+			unsigned short sel = ntohs(((unsigned short*)(block + 4))[0]);
+			SCREEN_SEL = (sel == 0xFFFF) ? 0 : (int)sel;
+			kvm_init();
 			break;
 		}
 	}
@@ -659,6 +746,9 @@ void* kvm_server_mainloop(void* param)
 		}
 
 		screen_num = CGMainDisplayID();
+		// Use the selected display if SCREEN_SEL > 0
+		if (SCREEN_SEL > 0 && SCREEN_SEL <= (int)g_displayCount)
+			screen_num = g_displayIDs[SCREEN_SEL - 1];
 
 		if (screen_num == 0) { g_shutdown = 1; senddebug(-2); break; }
 		
