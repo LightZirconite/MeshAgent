@@ -1009,6 +1009,8 @@ DWORD WINAPI kvm_server_mainloop_ex(LPVOID parm)
 		ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: initialize_gdiplus() SUCCESS");
 	}
 #endif
+	ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: Capture backend = Windows GDI BitBlt");
+	KVM_WriteLog(writeHandler, reserved, "Capture backend: Windows GDI BitBlt");
 	kvm_server_SetResolution(writeHandler, reserved);
 
 #ifdef _WINSERVICE

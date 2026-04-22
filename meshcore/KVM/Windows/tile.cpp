@@ -68,12 +68,15 @@ ULONG_PTR gdiplusToken;
 HDC hDesktopDC;
 HDC hCaptureDC;
 HBITMAP hCapturedBitmap;
+HGDIOBJ hCaptureDCOriginalBitmap = NULL;
 //HDC hdc;
 CLSID encoderClsid;
 ULONG encCompression = 50; // Image compression
 EncoderParameters encParam;
 LPVOID tilebuffer = NULL;
 unsigned int tilebuffersize = 0;
+int hCapturedBitmapWidth = 0;
+int hCapturedBitmapHeight = 0;
 
 // Used to obtain the GUID for the image encoder.
 int GetEncoderClsid(const WCHAR* format, CLSID* pClsid)
@@ -107,6 +110,38 @@ int adjust_screen_size(int pixles)
 	int extra = pixles % TILE_WIDTH; // Assuming tile width and height will remain the same.
 	if (extra != 0) return pixles + TILE_WIDTH - extra;
 	return pixles;
+}
+
+int ensure_capture_bitmap(int width, int height)
+{
+	HBITMAP newBitmap;
+	HGDIOBJ previousBitmap;
+
+	if (hCaptureDC == NULL || hDesktopDC == NULL) { return 0; }
+	if (hCapturedBitmap != NULL && hCapturedBitmapWidth == width && hCapturedBitmapHeight == height)
+	{
+		return 1;
+	}
+
+	if ((newBitmap = CreateCompatibleBitmap(hDesktopDC, width, height)) == NULL)
+	{
+		KVMDEBUG("CreateCompatibleBitmap() returned NULL", 0);
+		return 0;
+	}
+	if ((previousBitmap = SelectObject(hCaptureDC, newBitmap)) == NULL || previousBitmap == HGDI_ERROR)
+	{
+		KVMDEBUG("SelectObject() failed", 0);
+		DeleteObject(newBitmap);
+		return 0;
+	}
+
+	if (hCaptureDCOriginalBitmap == NULL) { hCaptureDCOriginalBitmap = previousBitmap; }
+	if (hCapturedBitmap != NULL) { DeleteObject(hCapturedBitmap); }
+
+	hCapturedBitmap = newBitmap;
+	hCapturedBitmapWidth = width;
+	hCapturedBitmapHeight = height;
+	return 1;
 }
 
 // Extracts the required tile buffer from the desktop buffer
@@ -481,20 +516,17 @@ int get_tile_at(int x, int y, void** buffer, long long *bufferSize, void *deskto
 int get_desktop_buffer(void **buffer, long long *bufferSize, long* mouseMove)
 {
 	BITMAPINFO bmpInfo;
+	int captureWidth;
+	int captureHeight;
 
 	*buffer = NULL; // If anything fails, this will be the indication.
 	*bufferSize = 0;
 
 	if (hDesktopDC) ReleaseDC(NULL, hDesktopDC);
 	if ((hDesktopDC = GetDC(NULL)) == NULL) { KVMDEBUG("GetDC(NULL) returned NULL", 0); return 1; } // We need to do this incase the current desktop changes.
-	if (hCapturedBitmap) DeleteObject(hCapturedBitmap);
-	if ((hCapturedBitmap = CreateCompatibleBitmap(hDesktopDC, adjust_screen_size(SCALED_WIDTH), adjust_screen_size(SCALED_HEIGHT))) == NULL)
-	{
-		KVMDEBUG("CreateCompatibleBitmap() returned NULL", 0);
-		return 1;
-	}
-
-	if (SelectObject(hCaptureDC, hCapturedBitmap) == NULL) { KVMDEBUG("SelectObject() failed", 0); return(1); }
+	captureWidth = adjust_screen_size(SCALED_WIDTH);
+	captureHeight = adjust_screen_size(SCALED_HEIGHT);
+	if (!ensure_capture_bitmap(captureWidth, captureHeight)) { return 1; }
 	if (SCALING_FACTOR == 1024)
 	{
 		if (BitBlt(hCaptureDC, 0, 0, adjust_screen_size(SCREEN_WIDTH), adjust_screen_size(SCREEN_HEIGHT), hDesktopDC, SCREEN_X, SCREEN_Y, SRCCOPY) == FALSE)
@@ -506,11 +538,9 @@ int get_desktop_buffer(void **buffer, long long *bufferSize, long* mouseMove)
 		{
 			CURSORINFO info = { 0 };
 			BITMAP bm;
-			ICONINFO ii;
+			ICONINFO ii = { 0 };
 			info.cbSize = sizeof(info);
-			GetCursorInfo(&info);
-			GetIconInfo(info.hCursor, &ii);
-			if (GetObject(ii.hbmMask, sizeof(bm), &bm) == sizeof(bm))
+			if (GetCursorInfo(&info) && GetIconInfo(info.hCursor, &ii) && GetObject(ii.hbmMask, sizeof(bm), &bm) == sizeof(bm))
 			{
 				HDC hdcScreen = GetDC(NULL);
 				if (hdcScreen != NULL)
@@ -527,10 +557,12 @@ int get_desktop_buffer(void **buffer, long long *bufferSize, long* mouseMove)
 						SelectObject(hdcMem, hbmold);
 					}
 					if (hbmCanvas != NULL) { DeleteObject(hbmCanvas); }
-					if (hdcMem != NULL) { ReleaseDC(NULL, hdcMem); }
+					if (hdcMem != NULL) { DeleteDC(hdcMem); }
 					if (hdcScreen != NULL) { ReleaseDC(NULL, hdcScreen); }
 				}
 			}
+			if (ii.hbmMask != NULL) { DeleteObject(ii.hbmMask); }
+			if (ii.hbmColor != NULL) { DeleteObject(ii.hbmColor); }
 		}
 	}
 	else
@@ -547,7 +579,7 @@ int get_desktop_buffer(void **buffer, long long *bufferSize, long* mouseMove)
 	bmpInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
 
 	// Populates some fields in the bmpInfo struct based on the properties of the bitmap.
-	if (GetDIBits(hDesktopDC, hCapturedBitmap, 0, 0, NULL, &bmpInfo, DIB_RGB_COLORS) == 0)
+	if (GetDIBits(hCaptureDC, hCapturedBitmap, 0, 0, NULL, &bmpInfo, DIB_RGB_COLORS) == 0)
 	{
 		KVMDEBUG("GetDIBits() failed", 0);
 		ILibCriticalLog(NULL, __FILE__, __LINE__, 252, GetLastError());
@@ -564,7 +596,7 @@ int get_desktop_buffer(void **buffer, long long *bufferSize, long* mouseMove)
 	if ((*buffer = malloc((size_t)*bufferSize)) == NULL) { KVMDEBUG("malloc() failed", 0); return 1; }
 
 	bmpInfo.bmiHeader.biCompression = BI_RGB;
-	if (GetDIBits(hDesktopDC, hCapturedBitmap, 0, bmpInfo.bmiHeader.biHeight, *buffer, &bmpInfo, DIB_RGB_COLORS) == 0) { KVMDEBUG("GetDIBits() failed", 0); free(*buffer); return(1); }
+	if (GetDIBits(hCaptureDC, hCapturedBitmap, 0, bmpInfo.bmiHeader.biHeight, *buffer, &bmpInfo, DIB_RGB_COLORS) == 0) { KVMDEBUG("GetDIBits() failed", 0); free(*buffer); return(1); }
 
 	return 0;
 }
@@ -602,8 +634,7 @@ short initialize_gdiplus()
 
 	if ((hDesktopDC = GetDC(NULL)) == NULL) { KVMDEBUG("GetDC() failed", 0); return 0; }
 	if ((hCaptureDC = CreateCompatibleDC(hDesktopDC)) == NULL) { KVMDEBUG("CreateCompatibleDC() failed", 0); return 0; }
-	if ((hCapturedBitmap = CreateCompatibleBitmap(hDesktopDC, SCALED_WIDTH, SCALED_HEIGHT)) == NULL) { KVMDEBUG("CreateCompatibleBitmap() failed", 0); return 0; }
-	if (SelectObject(hCaptureDC, hCapturedBitmap) == NULL) { KVMDEBUG("SelectObject() failed", 0); }
+	if (!ensure_capture_bitmap(adjust_screen_size(SCALED_WIDTH), adjust_screen_size(SCALED_HEIGHT))) { return 0; }
 
 	// Find encoder and setup encoder parameters
 	GetEncoderClsid(L"image/jpeg", &encoderClsid);
@@ -622,8 +653,13 @@ void teardown_gdiplus()
 	tilebuffersize = 0;
 	tilebuffer = NULL;
 	GdiplusShutdown(gdiplusToken);
-	DeleteDC(hCaptureDC);
-	DeleteObject(hCapturedBitmap);
+	if (hCaptureDC != NULL && hCaptureDCOriginalBitmap != NULL) { SelectObject(hCaptureDC, hCaptureDCOriginalBitmap); }
+	if (hCapturedBitmap != NULL) { DeleteObject(hCapturedBitmap); }
+	if (hCaptureDC != NULL) { DeleteDC(hCaptureDC); }
+	hCaptureDCOriginalBitmap = NULL;
+	hCapturedBitmap = NULL;
+	hCapturedBitmapWidth = 0;
+	hCapturedBitmapHeight = 0;
 	if (hDesktopDC) ReleaseDC(NULL, hDesktopDC);
 	hDesktopDC = NULL;
 }
