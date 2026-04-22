@@ -1009,8 +1009,8 @@ DWORD WINAPI kvm_server_mainloop_ex(LPVOID parm)
 		ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: initialize_gdiplus() SUCCESS");
 	}
 #endif
-	ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: Capture backend = Windows GDI BitBlt");
-	KVM_WriteLog(writeHandler, reserved, "Capture backend: Windows GDI BitBlt");
+	ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: Capture backend = Windows GDI BitBlt + DIB Section");
+	KVM_WriteLog(writeHandler, reserved, "Capture backend: Windows GDI BitBlt + DIB Section");
 	kvm_server_SetResolution(writeHandler, reserved);
 
 #ifdef _WINSERVICE
@@ -1146,7 +1146,8 @@ DWORD WINAPI kvm_server_mainloop_ex(LPVOID parm)
 			KVMDEBUG("get_desktop_buffer() failed, skipping frame", (int)GetCurrentThreadId());
 			// Don't kill the KVM process on capture failure (e.g. multi-monitor BitBlt issue).
 			// Just free the buffer and skip this frame so the user can switch back to a working display.
-			if (desktop) { free(desktop); desktop = NULL; }
+			if (desktop_buffer_needs_free(desktop)) { free(desktop); }
+			desktop = NULL;
 			Sleep(FRAME_RATE_TIMER);
 			continue;
 		}
@@ -1207,7 +1208,7 @@ DWORD WINAPI kvm_server_mainloop_ex(LPVOID parm)
 
 			KVMDEBUG("kvm_server_mainloop / loop2", (int)GetCurrentThreadId());
 
-			if (desktop)
+			if (desktop_buffer_needs_free(desktop))
 				free(desktop);
 			desktop = NULL;
 			desktopsize = 0;

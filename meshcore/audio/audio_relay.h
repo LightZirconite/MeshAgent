@@ -18,8 +18,10 @@ limitations under the License.
 #ifndef __AUDIO_RELAY_H__
 #define __AUDIO_RELAY_H__
 
+#include "microstack/ILibParsers.h"
+
 // Compatible with ILibKVM_WriteHandler / ILibTransport_DoneState (0=COMPLETE, 1=INCOMPLETE, -1=ERROR)
-typedef int (*AUDIO_WriteHandler)(char *buffer, int bufferLen, void *reserved);
+typedef ILibTransport_DoneState(*AUDIO_WriteHandler)(char *buffer, int bufferLen, void *reserved);
 
 //
 // audio_relay_setup - Start desktop audio capture.

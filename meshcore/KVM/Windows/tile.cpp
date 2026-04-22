@@ -69,6 +69,7 @@ HDC hDesktopDC;
 HDC hCaptureDC;
 HBITMAP hCapturedBitmap;
 HGDIOBJ hCaptureDCOriginalBitmap = NULL;
+void *hCapturedBitmapBits = NULL;
 //HDC hdc;
 CLSID encoderClsid;
 ULONG encCompression = 50; // Image compression
@@ -116,6 +117,7 @@ int ensure_capture_bitmap(int width, int height)
 {
 	HBITMAP newBitmap;
 	HGDIOBJ previousBitmap;
+	BITMAPINFO bmi;
 
 	if (hCaptureDC == NULL || hDesktopDC == NULL) { return 0; }
 	if (hCapturedBitmap != NULL && hCapturedBitmapWidth == width && hCapturedBitmapHeight == height)
@@ -123,15 +125,23 @@ int ensure_capture_bitmap(int width, int height)
 		return 1;
 	}
 
-	if ((newBitmap = CreateCompatibleBitmap(hDesktopDC, width, height)) == NULL)
+	ZeroMemory(&bmi, sizeof(BITMAPINFO));
+	bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+	bmi.bmiHeader.biWidth = width;
+	bmi.bmiHeader.biHeight = height;
+	bmi.bmiHeader.biPlanes = 1;
+	bmi.bmiHeader.biBitCount = 32;
+	bmi.bmiHeader.biCompression = BI_RGB;
+	if ((newBitmap = CreateDIBSection(hDesktopDC, &bmi, DIB_RGB_COLORS, &hCapturedBitmapBits, NULL, 0)) == NULL || hCapturedBitmapBits == NULL)
 	{
-		KVMDEBUG("CreateCompatibleBitmap() returned NULL", 0);
+		KVMDEBUG("CreateDIBSection() returned NULL", 0);
 		return 0;
 	}
 	if ((previousBitmap = SelectObject(hCaptureDC, newBitmap)) == NULL || previousBitmap == HGDI_ERROR)
 	{
 		KVMDEBUG("SelectObject() failed", 0);
 		DeleteObject(newBitmap);
+		hCapturedBitmapBits = NULL;
 		return 0;
 	}
 
@@ -515,7 +525,6 @@ int get_tile_at(int x, int y, void** buffer, long long *bufferSize, void *deskto
 // This function captures the entire desktop buffer to scan.
 int get_desktop_buffer(void **buffer, long long *bufferSize, long* mouseMove)
 {
-	BITMAPINFO bmpInfo;
 	int captureWidth;
 	int captureHeight;
 
@@ -575,30 +584,15 @@ int get_desktop_buffer(void **buffer, long long *bufferSize, long* mouseMove)
 		}
 	}
 
-	ZeroMemory(&bmpInfo, sizeof(BITMAPINFO));
-	bmpInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-
-	// Populates some fields in the bmpInfo struct based on the properties of the bitmap.
-	if (GetDIBits(hCaptureDC, hCapturedBitmap, 0, 0, NULL, &bmpInfo, DIB_RGB_COLORS) == 0)
-	{
-		KVMDEBUG("GetDIBits() failed", 0);
-		ILibCriticalLog(NULL, __FILE__, __LINE__, 252, GetLastError());
-		return(1);
-	}
-
-	if (bmpInfo.bmiHeader.biSizeImage <= 0)
-	{
-		bmpInfo.bmiHeader.biSizeImage = bmpInfo.bmiHeader.biWidth * abs(bmpInfo.bmiHeader.biHeight) * (bmpInfo.bmiHeader.biBitCount + 7) / 8;
-	}
-
-	*bufferSize = bmpInfo.bmiHeader.biSizeImage;
-	PIXEL_SIZE = bmpInfo.bmiHeader.biBitCount / 8;
-	if ((*buffer = malloc((size_t)*bufferSize)) == NULL) { KVMDEBUG("malloc() failed", 0); return 1; }
-
-	bmpInfo.bmiHeader.biCompression = BI_RGB;
-	if (GetDIBits(hCaptureDC, hCapturedBitmap, 0, bmpInfo.bmiHeader.biHeight, *buffer, &bmpInfo, DIB_RGB_COLORS) == 0) { KVMDEBUG("GetDIBits() failed", 0); free(*buffer); return(1); }
-
+	PIXEL_SIZE = 4;
+	*buffer = hCapturedBitmapBits;
+	*bufferSize = (long long)captureWidth * (long long)captureHeight * (long long)PIXEL_SIZE;
 	return 0;
+}
+
+int desktop_buffer_needs_free(void *buffer)
+{
+	return(buffer != NULL && buffer != hCapturedBitmapBits);
 }
 
 // Creates a BITMAPINFO object with required width and height
@@ -658,6 +652,7 @@ void teardown_gdiplus()
 	if (hCaptureDC != NULL) { DeleteDC(hCaptureDC); }
 	hCaptureDCOriginalBitmap = NULL;
 	hCapturedBitmap = NULL;
+	hCapturedBitmapBits = NULL;
 	hCapturedBitmapWidth = 0;
 	hCapturedBitmapHeight = 0;
 	if (hDesktopDC) ReleaseDC(NULL, hDesktopDC);

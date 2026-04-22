@@ -41,6 +41,7 @@ short initialize_gdiplus();
 void teardown_gdiplus();
 int get_tile_at(int x, int y, void** buffer, long long *bufferSize, void *desktop, int row, int col);
 int get_desktop_buffer(void **buffer, long long *bufferSize, long*);
+int desktop_buffer_needs_free(void *buffer);
 BITMAPINFO get_bmp_info(int width, int height);
 void set_tile_compression(int type, int level);
 void switch_to_desktop_context();
