@@ -1,8 +1,0 @@
-MSBuild version 18.4.0+6e61e96ac for .NET Framework
-MSBUILD : error MSB1008: Only one project can be specified.
-    Full command line: '"C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" MeshAgent-2022.sln p:Configuration=Release p:Platform=x64 /verbosity:minimal "C:/Program Files/Git/nologo"'
-  Switches appended by response files:
-'' came from 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.rsp'
-Switch: p:Configuration=Release
-
-For switch syntax, type "MSBuild -help"

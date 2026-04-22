@@ -1288,6 +1288,7 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 	#else
 		kvm_relay_setup(agent->exePath, NULL, ILibDuktape_MeshAgent_RemoteDesktop_KVM_WriteSink, ptrs, TSID);
 	#endif	
+	MeshAgent_sendConsoleText(ctx, "Desktop stream mode: Windows GDI BitBlt + DIB Section; transport: tiled image stream.");
 #else
 	int console_uid = 0;
 	if (duk_peval_string(ctx, "require('user-sessions').consoleUid();") == 0) { console_uid = duk_get_int(ctx, -1); }
