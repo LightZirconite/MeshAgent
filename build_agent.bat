@@ -8,6 +8,7 @@ set "VCVARS_PATH="
 set "MSBUILD_PATH="
 set "RELEASE_DIR=%~dp0Release"
 set "MESH_SERVICE_PDB=%RELEASE_DIR%\MeshService64.pdb"
+set "MESH_SERVICE_PDB_MOVE_TARGET="
 
 if exist "%VSWHERE%" (
     for /f "usebackq delims=" %%I in (`"%VSWHERE%" -latest -products * -requires Microsoft.Component.MSBuild -property installationPath`) do set "VSINSTALLDIR=%%I"
@@ -48,11 +49,18 @@ if errorlevel 1 (
 )
 
 if exist "%MESH_SERVICE_PDB%" (
+    attrib -R "%MESH_SERVICE_PDB%" >nul 2>nul
     del /f /q "%MESH_SERVICE_PDB%" >nul 2>nul
     if exist "%MESH_SERVICE_PDB%" (
-        color 0E
-        echo [!] Impossible de supprimer MeshService64.pdb avant le build. Le build continue quand meme.
-        echo.
+        set "MESH_SERVICE_PDB_MOVE_TARGET=%RELEASE_DIR%\MeshService64.pdb.%RANDOM%.bak"
+        move /y "%MESH_SERVICE_PDB%" "%MESH_SERVICE_PDB_MOVE_TARGET%" >nul 2>nul
+        if exist "%MESH_SERVICE_PDB%" (
+            color 0E
+            echo [!] Impossible de supprimer ou de deplacer MeshService64.pdb avant le build. Le build continue quand meme.
+            echo.
+        ) else (
+            echo [i] Ancien MeshService64.pdb deplace avant le build.
+        )
     ) else (
         echo [i] Ancien MeshService64.pdb supprime avant le build.
     )
