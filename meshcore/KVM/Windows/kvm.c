@@ -185,7 +185,6 @@ void kvm_hidden_desktop_cleanup()
 {
 	if (g_hiddenShell.hProcess != NULL)
 	{
-		TerminateProcess(g_hiddenShell.hProcess, 0);
 		CloseHandle(g_hiddenShell.hProcess);
 		g_hiddenShell.hProcess = NULL;
 	}
@@ -201,15 +200,24 @@ void kvm_hidden_desktop_cleanup()
 	}
 }
 
+static BOOL CALLBACK kvm_hidden_desktop_window_counter(HWND hwnd, LPARAM lParam)
+{
+	int *count = (int *)lParam;
+	UNREFERENCED_PARAMETER(hwnd);
+	if (count != NULL) { (*count)++; }
+	return TRUE;
+}
+
 int kvm_hidden_desktop_start()
 {
 	STARTUPINFOA si;
 	char desktopName[] = "MeshCentralHidden";
 	char shellPath[MAX_PATH];
+	int existingWindowCount = 0;
 
 	if (g_hiddenDesktop != NULL) return 1;
 
-	g_hiddenDesktop = CreateDesktopA(desktopName, NULL, NULL, 0,
+	g_hiddenDesktop = OpenDesktopA(desktopName, 0, FALSE,
 		DESKTOP_CREATEMENU |
 		DESKTOP_CREATEWINDOW |
 		DESKTOP_ENUMERATE |
@@ -219,13 +227,28 @@ int kvm_hidden_desktop_start()
 		DESKTOP_READOBJECTS |
 		DESKTOP_SWITCHDESKTOP |
 		DESKTOP_WRITEOBJECTS |
-		GENERIC_ALL,
-		NULL);
+		GENERIC_ALL);
 
 	if (g_hiddenDesktop == NULL)
 	{
-		KVMDEBUG("CreateDesktopA(MeshCentralHidden) failed", 0);
-		return 0;
+		g_hiddenDesktop = CreateDesktopA(desktopName, NULL, NULL, 0,
+			DESKTOP_CREATEMENU |
+			DESKTOP_CREATEWINDOW |
+			DESKTOP_ENUMERATE |
+			DESKTOP_HOOKCONTROL |
+			DESKTOP_JOURNALPLAYBACK |
+			DESKTOP_JOURNALRECORD |
+			DESKTOP_READOBJECTS |
+			DESKTOP_SWITCHDESKTOP |
+			DESKTOP_WRITEOBJECTS |
+			GENERIC_ALL,
+			NULL);
+
+		if (g_hiddenDesktop == NULL)
+		{
+			KVMDEBUG("CreateDesktopA(MeshCentralHidden) failed", 0);
+			return 0;
+		}
 	}
 
 	if (SetThreadDesktop(g_hiddenDesktop) == 0)
@@ -241,6 +264,16 @@ int kvm_hidden_desktop_start()
 	si.lpDesktop = "WinSta0\\MeshCentralHidden";
 	si.dwFlags = STARTF_USESHOWWINDOW;
 	si.wShowWindow = SW_SHOW;
+
+	EnumDesktopWindows(g_hiddenDesktop, kvm_hidden_desktop_window_counter, (LPARAM)&existingWindowCount);
+	if (existingWindowCount > 0)
+	{
+		if (gKVMRemoteLogging != NULL)
+		{
+			ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: Reusing hidden desktop = %s", desktopName);
+		}
+		return 1;
+	}
 
 	if (GetWindowsDirectoryA(shellPath, sizeof(shellPath)) == 0 ||
 		strnlen_s(shellPath, sizeof(shellPath)) + 13 >= sizeof(shellPath))
