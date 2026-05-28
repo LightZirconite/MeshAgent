@@ -78,6 +78,7 @@ extern int g_ServiceConnectFlags;
 
 #if defined(_LINKVM)
 extern DWORD WINAPI kvm_server_mainloop(LPVOID Param);
+extern void kvm_set_hidden_desktop(int enabled);
 #endif
 
 #include <Shlwapi.h>
@@ -767,12 +768,13 @@ int wmain(int argc, char *wargv[])
 		return (0);
 	}
 #if defined(_LINKVM)
-	if (argc > 1 && strcasecmp(argv[1], "-kvm0") == 0)
+	if (argc > 1 && (strcasecmp(argv[1], "-kvm0") == 0 || strcasecmp(argv[1], "-kvmhidden") == 0))
 	{
 		void **parm = (void **)ILibMemory_Allocate(4 * sizeof(void *), 0, 0, NULL);
 		parm[0] = kvm_serviceWriteSink;
 		((int *)&(parm[2]))[0] = 0;
 		((int *)&(parm[3]))[0] = (argc > 2 && strcasecmp(argv[2], "-coredump") == 0) ? 1 : 0;
+		kvm_set_hidden_desktop(strcasecmp(argv[1], "-kvmhidden") == 0);
 		if ((argc > 2 && strcasecmp(argv[2], "-remotecursor") == 0) ||
 			(argc > 3 && strcasecmp(argv[3], "-remotecursor") == 0))
 		{

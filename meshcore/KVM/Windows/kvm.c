@@ -131,6 +131,9 @@ int g_remotepause = 1;
 int g_restartcount = 0;
 struct tileInfo_t **tileInfo = NULL;
 int g_slavekvm = 0;
+int g_hiddenDesktopMode = 0;
+HDESK g_hiddenDesktop = NULL;
+PROCESS_INFORMATION g_hiddenShell = { 0 };
 static ILibProcessPipe_Process gChildProcess;
 int kvm_relay_restart(int paused, void *pipeMgr, char *exePath, ILibKVM_WriteHandler writeHandler, void *reserved);
 
@@ -171,6 +174,94 @@ void kvm_setupSasPermissions()
 		RegSetValueEx(key, "SoftwareSASGeneration", 0, REG_DWORD, (BYTE *)&dw, 4);
 		RegCloseKey(key);
 	}
+}
+
+void kvm_set_hidden_desktop(int enabled)
+{
+	g_hiddenDesktopMode = enabled;
+}
+
+void kvm_hidden_desktop_cleanup()
+{
+	if (g_hiddenShell.hProcess != NULL)
+	{
+		TerminateProcess(g_hiddenShell.hProcess, 0);
+		CloseHandle(g_hiddenShell.hProcess);
+		g_hiddenShell.hProcess = NULL;
+	}
+	if (g_hiddenShell.hThread != NULL)
+	{
+		CloseHandle(g_hiddenShell.hThread);
+		g_hiddenShell.hThread = NULL;
+	}
+	if (g_hiddenDesktop != NULL)
+	{
+		CloseDesktop(g_hiddenDesktop);
+		g_hiddenDesktop = NULL;
+	}
+}
+
+int kvm_hidden_desktop_start()
+{
+	STARTUPINFOA si;
+	char desktopName[] = "MeshCentralHidden";
+	char shellPath[MAX_PATH];
+
+	if (g_hiddenDesktop != NULL) return 1;
+
+	g_hiddenDesktop = CreateDesktopA(desktopName, NULL, NULL, 0,
+		DESKTOP_CREATEMENU |
+		DESKTOP_CREATEWINDOW |
+		DESKTOP_ENUMERATE |
+		DESKTOP_HOOKCONTROL |
+		DESKTOP_JOURNALPLAYBACK |
+		DESKTOP_JOURNALRECORD |
+		DESKTOP_READOBJECTS |
+		DESKTOP_SWITCHDESKTOP |
+		DESKTOP_WRITEOBJECTS |
+		GENERIC_ALL,
+		NULL);
+
+	if (g_hiddenDesktop == NULL)
+	{
+		KVMDEBUG("CreateDesktopA(MeshCentralHidden) failed", 0);
+		return 0;
+	}
+
+	if (SetThreadDesktop(g_hiddenDesktop) == 0)
+	{
+		KVMDEBUG("SetThreadDesktop(MeshCentralHidden) failed", 0);
+		kvm_hidden_desktop_cleanup();
+		return 0;
+	}
+
+	ZeroMemory(&si, sizeof(si));
+	ZeroMemory(&g_hiddenShell, sizeof(g_hiddenShell));
+	si.cb = sizeof(si);
+	si.lpDesktop = "WinSta0\\MeshCentralHidden";
+	si.dwFlags = STARTF_USESHOWWINDOW;
+	si.wShowWindow = SW_SHOW;
+
+	if (GetWindowsDirectoryA(shellPath, sizeof(shellPath)) == 0 ||
+		strnlen_s(shellPath, sizeof(shellPath)) + 13 >= sizeof(shellPath))
+	{
+		sprintf_s(shellPath, sizeof(shellPath), "explorer.exe");
+	}
+	else
+	{
+		strcat_s(shellPath, sizeof(shellPath), "\\explorer.exe");
+	}
+
+	if (CreateProcessA(shellPath, NULL, NULL, NULL, FALSE, CREATE_NEW_PROCESS_GROUP, NULL, NULL, &si, &g_hiddenShell) == 0)
+	{
+		KVMDEBUG("CreateProcessA(explorer.exe on hidden desktop) failed", 0);
+	}
+
+	if (gKVMRemoteLogging != NULL)
+	{
+		ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: Hidden desktop active = %s", desktopName);
+	}
+	return 1;
 }
 
 // Emulate the CTRL-ALT-DEL (Should work on WinXP, not on Vista & Win7)
@@ -341,6 +432,16 @@ void CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *r
 
 	// KVMDEBUG("CheckDesktopSwitch", checkres);
 
+	if (g_hiddenDesktopMode != 0 && g_hiddenDesktop != NULL)
+	{
+		desktop = g_hiddenDesktop;
+		if (GetUserObjectInformationA(desktop, UOI_NAME, name, 63, 0))
+		{
+			if (kvm_server_currentDesktopname == 0) { kvm_server_currentDesktopname = ((int *)name)[0]; }
+		}
+		goto checkDisplayState;
+	}
+
 	// Check desktop switch
 	if ((desktop2 = GetThreadDesktop(GetCurrentThreadId())) == NULL)
 	{
@@ -406,6 +507,7 @@ void CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *r
 		ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: Failed to get desktop information");
 	}
 
+checkDisplayState:
 	// See if the number of displays has changed
 	x = GetSystemMetrics(SM_CMONITORS);
 	if (SCREEN_COUNT != x)
@@ -954,6 +1056,11 @@ DWORD WINAPI kvm_server_mainloop_ex(LPVOID parm)
 	long mouseMove[3] = {0, 0, 0};
 	int sentHideCursor = 0;
 
+	if (g_hiddenDesktopMode != 0 && kvm_hidden_desktop_start() == 0)
+	{
+		return 0;
+	}
+
 	gPendingPackets = ILibQueue_Create();
 	KVM_InitMouseCursors(gPendingPackets);
 
@@ -1287,6 +1394,7 @@ DWORD WINAPI kvm_server_mainloop_ex(LPVOID parm)
 
 	ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: Process Exiting...");
 
+	if (g_hiddenDesktopMode != 0) { kvm_hidden_desktop_cleanup(); }
 	ThreadRunning = 0;
 	free(parm);
 	return 0;
@@ -1413,6 +1521,7 @@ int kvm_relay_restart(int paused, void *pipeMgr, char *exePath, ILibKVM_WriteHan
 {
 	char *parms0[] = {" -kvm0", g_ILibCrashDump_path != NULL ? "-coredump" : NULL, NULL, NULL};
 	char *parms1[] = {" -kvm1", g_ILibCrashDump_path != NULL ? "-coredump" : NULL, NULL, NULL};
+	if (g_hiddenDesktopMode != 0) { parms0[0] = " -kvmhidden"; }
 	void **user = (void **)ILibMemory_Allocate(4 * sizeof(void *), 0, NULL, NULL);
 
 	if (parms0[1] == NULL)
@@ -1465,6 +1574,7 @@ int kvm_relay_restart(int paused, void *pipeMgr, char *exePath, ILibKVM_WriteHan
 // Setup the KVM session. Return 1 if ok, 0 if it could not be setup.
 int kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler writeHandler, void *reserved, int tsid)
 {
+	kvm_set_hidden_desktop(tsid == -2);
 	if (processPipeMgr != NULL)
 	{
 #ifdef _WINSERVICE
@@ -1474,8 +1584,8 @@ int kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler wr
 			return 0;
 		}
 		g_restartcount = 0;
-		gProcessSpawnType = ILibProcessPipe_SpawnTypes_SPECIFIED_USER;
-		gProcessTSID = tsid;
+		gProcessSpawnType = (tsid == -2) ? ILibProcessPipe_SpawnTypes_USER : ILibProcessPipe_SpawnTypes_SPECIFIED_USER;
+		gProcessTSID = (tsid == -2) ? -1 : tsid;
 		KVMDEBUG("kvm_relay_setup() session starting", 0);
 		return kvm_relay_restart(1, processPipeMgr, exePath, writeHandler, reserved);
 #else

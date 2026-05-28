@@ -100,7 +100,22 @@ if (process.platform == 'linux')
 
     function hasVirtualSessionSupport()
     {
-        return (require('user-sessions').hasLoginCtl && hasXvfb && (hasGnomeSession || hasLxde))
+        return (require('user-sessions').hasLoginCtl && hasXvfb && (hasGnomeSession || hasLxde || hasXfce))
+    }
+
+    function diagnostics()
+    {
+        return {
+            platform: process.platform,
+            hasLoginCtl: require('user-sessions').hasLoginCtl ? true : false,
+            hasXvfb: hasXvfb ? true : false,
+            hasGnomeSession: hasGnomeSession ? true : false,
+            hasLxde: hasLxde ? true : false,
+            hasXfce: hasXfce ? true : false,
+            selectedDesktopManager: startDM,
+            hasVirtualSessionSupport: hasVirtualSessionSupport(),
+            allowedUIDs: allowedUIDs
+        };
     }
 
 
@@ -247,6 +262,7 @@ if (process.platform == 'linux')
             users: getUsers,
             loginUids: loginUids,
             allowed: allowedUIDs,
+            diagnostics: diagnostics,
             waylandStatus: waylandStatus,
             disableWayland: disableWayland,
             enableWayland: enableWayland,
@@ -260,6 +276,7 @@ else
             createVirtualSession: function (uid) { return (uid); },
             hasVirtualSessionSupport: false,
             users: getUsers,
-            allowed: allowedUIDs
+            allowed: allowedUIDs,
+            diagnostics: function () { return { platform: process.platform, hasVirtualSessionSupport: false }; }
         }
 }

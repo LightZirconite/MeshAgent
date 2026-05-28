@@ -4138,9 +4138,8 @@ void MeshServer_ConnectEx(MeshAgentHostContainer *agent)
 	// Set User-Agent for proxies to identify agents and versions
 	const char* FieldData = "MeshAgent ";
 	char combined[40];
-	strcpy(combined, FieldData);
-	strcat(combined, SOURCE_COMMIT_DATE);
-	ILibAddHeaderLine(req, "User-Agent", 10, combined, (int)strnlen_s(combined, 50));
+	snprintf(combined, sizeof(combined), "%s%s", FieldData, SOURCE_COMMIT_DATE);
+	ILibAddHeaderLine(req, "User-Agent", 10, combined, (int)strnlen_s(combined, sizeof(combined)));
 
 	free(path);
 

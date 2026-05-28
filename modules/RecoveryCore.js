@@ -12,6 +12,69 @@ function sendConsoleText(msg)
 {
     require('MeshAgent').SendCommand({ "action": "msg", "type": "console", "value": msg });
 }
+
+function sendAlternativeDesktopResponse(request, response)
+{
+    response.action = 'msg';
+    response.type = 'alternativeDesktop';
+    response.op = request.op || 'capabilities';
+    if (request.sessionid != null) { response.sessionid = request.sessionid; }
+    if (request.reqid != null) { response.reqid = request.reqid; }
+    require('MeshAgent').SendCommand(response);
+}
+
+function processAlternativeDesktopCommand(data)
+{
+    var helper = require('alternative-desktop');
+    var op = data.op || 'capabilities';
+    var result = null;
+
+    switch (op)
+    {
+        case 'capabilities':
+            result = helper.capabilities();
+            break;
+        case 'setup':
+            result = helper.setup();
+            break;
+        case 'start':
+            result = helper.start({ sessionId: data.sessionId, mode: data.mode });
+            break;
+        case 'stop':
+            result = helper.stop({ sessionId: data.sessionId, mode: data.mode });
+            break;
+        default:
+            sendAlternativeDesktopResponse(data, { ok: false, error: 'Unsupported alternative desktop operation: ' + op });
+            return;
+    }
+
+    sendAlternativeDesktopResponse(data, { ok: result && result.ok !== false, result: result });
+}
+
+function startDefaultWindowsTerminal(cols, rows)
+{
+    var terminal = null;
+
+    try
+    {
+        var virtualTerminal = require('win-virtual-terminal');
+        if (virtualTerminal && virtualTerminal.supported && virtualTerminal.PowerShellCapable && virtualTerminal.PowerShellCapable())
+        {
+            terminal = virtualTerminal.StartPowerShell(cols, rows);
+        }
+    }
+    catch (e) { }
+
+    if (terminal != null) return terminal;
+
+    var legacyTerminal = require('win-terminal');
+    if (legacyTerminal.PowerShellCapable && legacyTerminal.PowerShellCapable())
+    {
+        return legacyTerminal.StartPowerShell(cols, rows);
+    }
+
+    return legacyTerminal.Start(cols, rows);
+}
 // Return p number of spaces 
 function addPad(p, ret) { var r = ''; for (var i = 0; i < p; i++) { r += ret; } return r; }
 
@@ -138,6 +201,17 @@ require('MeshAgent').AddCommandHandler(function (data)
                 {
                     switch (data.type)
                     {
+                    case 'alternativeDesktop': {
+                        try
+                        {
+                            processAlternativeDesktopCommand(data);
+                        }
+                        catch (e)
+                        {
+                            sendAlternativeDesktopResponse(data, { ok: false, error: '' + e });
+                        }
+                        break;
+                    }
                     case 'console': { // Process a console command
                         if (data.value && data.sessionid)
                         {
@@ -201,7 +275,7 @@ require('MeshAgent').AddCommandHandler(function (data)
                                                     // Remote terminal using native pipes
                                                     if (process.platform == "win32")
                                                     {
-                                                        this.httprequest._term = require('win-terminal').Start(80, 25);
+                                                        this.httprequest._term = startDefaultWindowsTerminal(80, 25);
                                                         this.httprequest._term.pipe(this, { dataTypeSkip: 1 });
                                                         this.pipe(this.httprequest._term, { dataTypeSkip: 1, end: false });
                                                         this.prependListener('end', function () { this.httprequest._term.end(function () { sendConsoleText('Terminal was closed'); }); });
