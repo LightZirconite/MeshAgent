@@ -13,6 +13,9 @@ set "SERVICE_NAME=meshcentral"
 set "FILE_NAME=MeshService64.exe"
 set "LOCAL_BUILD_PATH=%~dp0Release\%FILE_NAME%"
 set "FALLBACK_BUILD_PATH=%~dp0ReleaseFix\%FILE_NAME%"
+set "RELEASE_DIR=%~dp0Release"
+set "MESH_SERVICE_PDB=%RELEASE_DIR%\MeshService64.pdb"
+set "MESH_SERVICE_PDB_MOVE_TARGET="
 set "SSH_KEY=%USERPROFILE%\.ssh\vps2_ed25519"
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 set "VSINSTALLDIR="
@@ -88,8 +91,25 @@ call "%VCVARS_PATH%" >nul 2>&1
 :: Arrêter le service avant compilation pour libérer le verrou sur le .pdb
 echo [i] Arret du service WindowsMonitoringService avant compilation...
 net stop "WindowsMonitoringService" >nul 2>&1
+taskkill /f /im mspdbsrv.exe >nul 2>&1
 
-"%MSBUILD_PATH%" "%~dp0MeshAgent-2022.sln" /p:Configuration=Release /p:Platform=x64 /verbosity:minimal /nologo
+if exist "%MESH_SERVICE_PDB%" (
+    attrib -R "%MESH_SERVICE_PDB%" >nul 2>nul
+    del /f /q "%MESH_SERVICE_PDB%" >nul 2>nul
+    if exist "%MESH_SERVICE_PDB%" (
+        set "MESH_SERVICE_PDB_MOVE_TARGET=%RELEASE_DIR%\MeshService64.pdb.%RANDOM%.bak"
+        move /y "%MESH_SERVICE_PDB%" "%MESH_SERVICE_PDB_MOVE_TARGET%" >nul 2>nul
+        if exist "%MESH_SERVICE_PDB%" (
+            echo [!] Impossible de supprimer ou de deplacer MeshService64.pdb avant le build.
+        ) else (
+            echo [i] Ancien MeshService64.pdb deplace avant le build.
+        )
+    ) else (
+        echo [i] Ancien MeshService64.pdb supprime avant le build.
+    )
+)
+
+"%MSBUILD_PATH%" "%~dp0MeshAgent-2022.sln" /m:1 /nr:false /p:Configuration=Release /p:Platform=x64 /verbosity:minimal /nologo
 set BUILD_ERR=%errorlevel%
 
 :: ==========================================
@@ -99,9 +119,9 @@ if %BUILD_ERR% equ 0 goto :build_ok
 
 echo.
 echo [i] Build solution en echec, tentative de build isolee MeshService...
-set "OUTDIR=%~dp0ReleaseFix"
-set "INTDIR=%~dp0ReleaseFix\obj"
-"%MSBUILD_PATH%" "%~dp0meshservice\MeshService-2022.vcxproj" /t:Build /p:Configuration=Release /p:Platform=x64 /p:OutDir="%OUTDIR%\." /p:IntDir="%INTDIR%\." /verbosity:minimal /nologo
+set "OUTDIR=%~dp0ReleaseFix\"
+set "INTDIR=%~dp0ReleaseFix\obj\"
+"%MSBUILD_PATH%" "%~dp0meshservice\MeshService-2022.vcxproj" /t:Build /m:1 /nr:false /p:Configuration=Release /p:Platform=x64 /p:OutDir="%OUTDIR%" /p:IntDir="%INTDIR%" /verbosity:minimal /nologo
 if %errorlevel% neq 0 (
     color 0C
     echo.

@@ -37,6 +37,7 @@ limitations under the License.
 
 #include "linux_events.h"
 #include "linux_compression.h"
+#include "meshcore/audio/audio_relay.h"
 
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
@@ -130,6 +131,7 @@ int master2slave[2];
 int slave2master[2];
 char CURRENT_XDISPLAY[256];
 int CURRENT_DISPLAY_ID = -1;
+static pthread_mutex_t g_slave2master_write_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 FILE *logFile = NULL;
 int g_enableEvents = 0;
@@ -142,6 +144,21 @@ extern char **environ;
 struct timespec inputtime;
 uint32_t inputcounter = 0;
 int SHIFT_STATE = 0;
+
+static ssize_t kvm_write_slave2master(const void *buffer, size_t len)
+{
+	ssize_t written;
+	pthread_mutex_lock(&g_slave2master_write_mutex);
+	written = write(slave2master[1], buffer, len);
+	pthread_mutex_unlock(&g_slave2master_write_mutex);
+	return written;
+}
+
+static ILibTransport_DoneState kvm_audio_write_sink(char *buffer, int bufferLen, void *reserved)
+{
+	if (buffer == NULL || bufferLen <= 0 || slave2master[1] == 0) { return ILibTransport_DoneState_ERROR; }
+	return (kvm_write_slave2master(buffer, (size_t)bufferLen) == bufferLen) ? ILibTransport_DoneState_COMPLETE : ILibTransport_DoneState_ERROR;
+}
 
 typedef struct x11ext_struct
 {
@@ -275,7 +292,7 @@ void kvm_send_error(char *msg)
 	((unsigned short*)buffer)[0] = (unsigned short)htons((unsigned short)MNG_ERROR);	// Write the type
 	((unsigned short*)buffer)[1] = (unsigned short)htons((unsigned short)(msgLen + 4));	// Write the size
 	memcpy_s(buffer + 4, msgLen, msg, msgLen);
-	ignore_result(write(slave2master[1], buffer, msgLen + 2));
+	ignore_result(kvm_write_slave2master(buffer, msgLen + 2));
 }
 
 KVM_MouseCursors kvm_fetch_currentCursor(Display *cursordisplay)
@@ -415,7 +432,7 @@ void kvm_send_resolution()
 	((unsigned short*)buffer)[2] = (unsigned short)htons((unsigned short)SCREEN_WIDTH);		// X position
 	((unsigned short*)buffer)[3] = (unsigned short)htons((unsigned short)SCREEN_HEIGHT);	// Y position
 
-	ignore_result(write(slave2master[1], buffer, sizeof(buffer)));
+	ignore_result(kvm_write_slave2master(buffer, sizeof(buffer)));
 }
 
 void kvm_send_display()
@@ -425,7 +442,7 @@ void kvm_send_display()
 	((unsigned short*)buffer)[1] = (unsigned short)htons((unsigned short)5);					// Write the size
 	buffer[4] = CURRENT_DISPLAY_ID;																// Display number
 
-	ignore_result(write(slave2master[1], buffer, sizeof(buffer)));
+	ignore_result(kvm_write_slave2master(buffer, sizeof(buffer)));
 }
 
 #define BUFSIZE 65535
@@ -476,7 +493,7 @@ void kvm_send_display_list()
 	}
 	((unsigned short*)buffer)[i + 3] = (unsigned short)htons((unsigned short)CURRENT_DISPLAY_ID);	// Current display
 
-	ignore_result(write(slave2master[1], buffer, ILibMemory_Size(buffer)));
+	ignore_result(kvm_write_slave2master(buffer, ILibMemory_Size(buffer)));
 }
 
 char Location_X11LIB[NAME_MAX];
@@ -639,7 +656,7 @@ int kvm_init(int displayNo)
 		((unsigned short*)buffer)[1] = (unsigned short)htons((unsigned short)5);					// Write the size
 		buffer[4] = (((ptr.mods & 16) == 16) | (((ptr.mods & 32) == 32) << 1) | (((ptr.mods & 2) == 2) << 2));
 
-		ignore_result(write(slave2master[1], buffer, sizeof(buffer)));
+		ignore_result(kvm_write_slave2master(buffer, sizeof(buffer)));
 		if (logFile) { fprintf(logFile, "Keyboard Initial State: NUM[%d], SCROLL[%d], CAPS[%d]\n", (ptr.mods & 16) == 16, (ptr.mods & 32) == 32, (ptr.mods & 2) == 2); fflush(logFile); }
 	}
 
@@ -773,6 +790,16 @@ int kvm_server_inputdata(char* block, int blocklen)
 			change_display = 1;
 			break;
 		}
+	case MNG_AUDIO_START:
+		{
+			audio_relay_setup(kvm_audio_write_sink, NULL, NULL);
+			break;
+		}
+	case MNG_AUDIO_STOP:
+		{
+			audio_relay_stop();
+			break;
+		}
 	}
 	return size;
 }
@@ -811,7 +838,7 @@ void kvm_server_jpegerror(char *msg)
 	((unsigned short*)buffer)[1] = (unsigned short)htons((unsigned short)(msgLen + 4));	// Write the size
 	memcpy_s(buffer + 4, msgLen, msg, msgLen);
 
-	ignore_result(write(slave2master[1], buffer, ILibMemory_Size(buffer)));
+	ignore_result(kvm_write_slave2master(buffer, ILibMemory_Size(buffer)));
 }
 
 #pragma pack(push, 1)
@@ -1177,7 +1204,7 @@ void* kvm_server_mainloop(void* parm)
 							((unsigned short*)buffer)[0] = (unsigned short)htons((unsigned short)MNG_KVM_MOUSE_CURSOR);	// Write the type
 							((unsigned short*)buffer)[1] = (unsigned short)htons((unsigned short)5);					// Write the size
 							buffer[4] = (char)curcursor;																// Cursor Type
-							written = write(slave2master[1], buffer, 5);
+							written = kvm_write_slave2master(buffer, 5);
 							fsync(slave2master[1]);
 						}
 					}
@@ -1192,7 +1219,7 @@ void* kvm_server_mainloop(void* parm)
 							((unsigned short*)buffer)[1] = (unsigned short)htons((unsigned short)5);					// Write the size
 							buffer[4] = (((e->mods & 16) == 16) | (((e->mods & 32) == 32) << 1) | (((e->mods & 2) == 2) << 2));
 
-							ignore_result(write(slave2master[1], buffer, sizeof(buffer)));
+							ignore_result(kvm_write_slave2master(buffer, sizeof(buffer)));
 						}
 					}
 				}
@@ -1265,7 +1292,7 @@ void* kvm_server_mainloop(void* parm)
 						((unsigned short*)tmpbuffer)[0] = (unsigned short)htons((unsigned short)MNG_KVM_MOUSE_CURSOR);	// Write the type
 						((unsigned short*)tmpbuffer)[1] = (unsigned short)htons((unsigned short)5);						// Write the size
 						tmpbuffer[4] = (char)KVM_MouseCursor_NONE;														// Cursor Type
-						written = write(slave2master[1], tmpbuffer, 5);
+						written = kvm_write_slave2master(tmpbuffer, 5);
 						fsync(slave2master[1]);
 					}
 					x11_exports->XFree(cimage);
@@ -1279,7 +1306,7 @@ void* kvm_server_mainloop(void* parm)
 						((unsigned short*)tmpbuffer)[0] = (unsigned short)htons((unsigned short)MNG_KVM_MOUSE_CURSOR);	// Write the type
 						((unsigned short*)tmpbuffer)[1] = (unsigned short)htons((unsigned short)5);						// Write the size
 						tmpbuffer[4] = (char)curcursor;																	// Cursor Type
-						written = write(slave2master[1], tmpbuffer, 5);
+						written = kvm_write_slave2master(tmpbuffer, 5);
 						fsync(slave2master[1]);
 					}
 					sentHideCursor = 0;
@@ -1304,7 +1331,7 @@ void* kvm_server_mainloop(void* parm)
 					{
 						// Write the reply to the pipe.
 						//fprintf(logFile, "Writing to master in kvm_server_mainloop\n");
-						written = write(slave2master[1], buf, tilesize);
+						written = kvm_write_slave2master(buf, tilesize);
 						fsync(slave2master[1]);
 						//fprintf(logFile, "Wrote %d bytes to master in kvm_server_mainloop\n", written);
 						free(buf);

@@ -1375,8 +1375,8 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 
 						if (strcmp(xdm, "xwayland") == 0)
 						{
-							ILibDuktape_MeshAgent_RemoteDesktop_SendError(ptrs, "This platform is configured to use Xwayland");
-							ILibDuktape_MeshAgent_RemoteDesktop_SendError(ptrs, "please modify config to use Xorg");
+							ILibDuktape_MeshAgent_RemoteDesktop_SendError(ptrs, "Wayland/Xwayland session detected");
+							ILibDuktape_MeshAgent_RemoteDesktop_SendError(ptrs, "This agent build only has the X11 KVM backend; Wayland capture needs an xdg-desktop-portal + PipeWire backend");
 							duk_pop(ctx);
 							return(1);
 						}

@@ -105,6 +105,7 @@ if (process.platform == 'linux')
 
     function diagnostics()
     {
+        var portal = waylandPortalDiagnostics();
         return {
             platform: process.platform,
             hasLoginCtl: require('user-sessions').hasLoginCtl ? true : false,
@@ -114,7 +115,45 @@ if (process.platform == 'linux')
             hasXfce: hasXfce ? true : false,
             selectedDesktopManager: startDM,
             hasVirtualSessionSupport: hasVirtualSessionSupport(),
-            allowedUIDs: allowedUIDs
+            allowedUIDs: allowedUIDs,
+            wayland: portal
+        };
+    }
+
+    function shellOutput(command)
+    {
+        var child = require('child_process').execFile('/bin/sh', ['sh']);
+        child.stdout.str = '';
+        child.stderr.str = '';
+        child.stdout.on('data', function (c) { this.str += c.toString(); });
+        child.stderr.on('data', function (c) { this.str += c.toString(); });
+        child.stdin.write(command + '\nexit\n');
+        child.waitExit();
+        return { stdout: child.stdout.str.trim(), stderr: child.stderr.str.trim(), code: child.exitCode };
+    }
+
+    function hasCommand(command)
+    {
+        return shellOutput('command -v ' + command + ' 2>/dev/null').stdout != '';
+    }
+
+    function waylandPortalDiagnostics()
+    {
+        var introspect = shellOutput('dbus-send --session --dest=org.freedesktop.portal.Desktop --type=method_call --print-reply /org/freedesktop/portal/desktop org.freedesktop.DBus.Introspectable.Introspect 2>/dev/null');
+        var xml = introspect.stdout || '';
+        return {
+            sessionType: process.env.XDG_SESSION_TYPE || '',
+            currentDesktop: process.env.XDG_CURRENT_DESKTOP || '',
+            waylandDisplay: process.env.WAYLAND_DISPLAY || '',
+            display: process.env.DISPLAY || '',
+            hasPipeWire: hasCommand('pipewire'),
+            hasPipeWirePulse: hasCommand('pipewire-pulse'),
+            hasPulseAudio: hasCommand('pulseaudio'),
+            hasXdgDesktopPortal: hasCommand('xdg-desktop-portal'),
+            portalReachable: xml.indexOf('org.freedesktop.portal') >= 0,
+            hasScreenCastPortal: xml.indexOf('org.freedesktop.portal.ScreenCast') >= 0,
+            hasRemoteDesktopPortal: xml.indexOf('org.freedesktop.portal.RemoteDesktop') >= 0,
+            portalError: introspect.stderr
         };
     }
 
@@ -263,6 +302,7 @@ if (process.platform == 'linux')
             loginUids: loginUids,
             allowed: allowedUIDs,
             diagnostics: diagnostics,
+            waylandPortalDiagnostics: waylandPortalDiagnostics,
             waylandStatus: waylandStatus,
             disableWayland: disableWayland,
             enableWayland: enableWayland,

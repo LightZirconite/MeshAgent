@@ -60,7 +60,9 @@ function getLinuxCapabilities()
         return {
             state: 'available',
             mode: 'linux-xvfb',
-            reason: 'Linux virtual desktop is available',
+            reason: diagnostics && diagnostics.wayland && diagnostics.wayland.sessionType == 'wayland' ?
+                'Linux virtual Xvfb desktop is available while the physical session is Wayland' :
+                'Linux virtual desktop is available',
             diagnostics: diagnostics,
             sessions: spawnable
         };
