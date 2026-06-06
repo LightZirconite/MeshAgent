@@ -576,7 +576,7 @@ function uninstallService(params)
             {
                 process.stdout.write(' [ERROR]\n');
                 svc.close();
-                uninstallService2(this._params, ms);
+                uninstallService2(this._params, msh);
             }).parentPromise._params = params;
         }
         else

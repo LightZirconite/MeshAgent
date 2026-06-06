@@ -34,6 +34,15 @@ limitations under the License.
 #include "meshcore/audio/audio_relay.h"
 #endif
 
+#ifndef WDA_EXCLUDEFROMCAPTURE
+#define WDA_EXCLUDEFROMCAPTURE 0x00000011
+#endif
+
+#define KVM_PRIVACY_OVERLAY_CLASS "MeshCentralPrivacyOverlay"
+#define KVM_PRIVACY_OVERLAY_SHOW (WM_APP + 0x250)
+#define KVM_PRIVACY_OVERLAY_HIDE (WM_APP + 0x251)
+#define KVM_PRIVACY_OVERLAY_STOP (WM_APP + 0x252)
+
 #if defined(WIN32) && !defined(_WIN32_WCE) && !defined(_MINCORE)
 #define _CRTDBG_MAP_ALLOC
 #include <crtdbg.h>
@@ -456,6 +465,239 @@ void kvm_send_display_list(ILibKVM_WriteHandler writeHandler, void *reserved)
 
 void kvm_server_SetResolution();
 int kvm_server_currentDesktopname = 0;
+
+static HANDLE g_privacyOverlayThread = NULL;
+static DWORD g_privacyOverlayThreadId = 0;
+
+typedef LONG(WINAPI *RtlGetVersionHandler)(POSVERSIONINFOW);
+typedef BOOL(WINAPI *SetWindowDisplayAffinityHandler)(HWND, DWORD);
+
+static int kvm_privacy_overlay_supported()
+{
+	OSVERSIONINFOW versionInfo;
+	HMODULE ntdll;
+	RtlGetVersionHandler rtlGetVersion;
+
+	ZeroMemory(&versionInfo, sizeof(versionInfo));
+	versionInfo.dwOSVersionInfoSize = sizeof(versionInfo);
+
+	ntdll = GetModuleHandleA("ntdll.dll");
+	if (ntdll == NULL) { return 0; }
+
+	rtlGetVersion = (RtlGetVersionHandler)GetProcAddress(ntdll, "RtlGetVersion");
+	if (rtlGetVersion == NULL || rtlGetVersion(&versionInfo) != 0) { return 0; }
+
+	return (versionInfo.dwMajorVersion > 10 || (versionInfo.dwMajorVersion == 10 && versionInfo.dwBuildNumber >= 19041));
+}
+
+LRESULT CALLBACK kvm_privacy_overlay_window_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+	UNREFERENCED_PARAMETER(lParam);
+
+	switch (msg)
+	{
+	case WM_ERASEBKGND:
+	{
+		RECT rc;
+		HBRUSH brush = (HBRUSH)GetStockObject(BLACK_BRUSH);
+		GetClientRect(hwnd, &rc);
+		FillRect((HDC)wParam, &rc, brush);
+		return 1;
+	}
+	case WM_PAINT:
+	{
+		PAINTSTRUCT ps;
+		RECT rc;
+		HBRUSH brush = (HBRUSH)GetStockObject(BLACK_BRUSH);
+		HDC hdc = BeginPaint(hwnd, &ps);
+		GetClientRect(hwnd, &rc);
+		FillRect(hdc, &rc, brush);
+		EndPaint(hwnd, &ps);
+		return 0;
+	}
+	case WM_CLOSE:
+		return 0;
+	default:
+		return DefWindowProc(hwnd, msg, wParam, lParam);
+	}
+}
+
+static void kvm_privacy_overlay_destroy(HWND *hwnd)
+{
+	if (*hwnd != NULL)
+	{
+		DestroyWindow(*hwnd);
+		*hwnd = NULL;
+	}
+}
+
+static HWND kvm_privacy_overlay_create()
+{
+	int x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+	int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+	int w = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+	int h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+	HMODULE user32;
+	SetWindowDisplayAffinityHandler setWindowDisplayAffinity;
+	HWND hwnd;
+
+	if (w <= 0 || h <= 0)
+	{
+		x = 0;
+		y = 0;
+		w = GetSystemMetrics(SM_CXSCREEN);
+		h = GetSystemMetrics(SM_CYSCREEN);
+	}
+
+	hwnd = CreateWindowExA(
+		WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
+		KVM_PRIVACY_OVERLAY_CLASS,
+		"MeshCentral Privacy Overlay",
+		WS_POPUP,
+		x, y, w, h,
+		NULL,
+		NULL,
+		GetModuleHandle(NULL),
+		NULL);
+
+	if (hwnd == NULL) { return NULL; }
+
+	SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+	user32 = GetModuleHandleA("user32.dll");
+	setWindowDisplayAffinity = user32 == NULL ? NULL : (SetWindowDisplayAffinityHandler)GetProcAddress(user32, "SetWindowDisplayAffinity");
+	if (setWindowDisplayAffinity == NULL || setWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) == 0)
+	{
+		DestroyWindow(hwnd);
+		return NULL;
+	}
+
+	SetWindowPos(hwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+	ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+	UpdateWindow(hwnd);
+	return hwnd;
+}
+
+DWORD WINAPI kvm_privacy_overlay_thread(LPVOID param)
+{
+	WNDCLASSEXA wc;
+	MSG msg;
+	HWND overlay = NULL;
+
+	UNREFERENCED_PARAMETER(param);
+
+	ZeroMemory(&wc, sizeof(wc));
+	wc.cbSize = sizeof(wc);
+	wc.lpfnWndProc = kvm_privacy_overlay_window_proc;
+	wc.hInstance = GetModuleHandle(NULL);
+	wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+	wc.lpszClassName = KVM_PRIVACY_OVERLAY_CLASS;
+	RegisterClassExA(&wc);
+
+	PeekMessage(&msg, NULL, WM_USER, WM_USER, PM_NOREMOVE);
+	while (GetMessage(&msg, NULL, 0, 0) > 0)
+	{
+		if (msg.message == KVM_PRIVACY_OVERLAY_SHOW)
+		{
+			if (overlay == NULL) { overlay = kvm_privacy_overlay_create(); }
+			if (overlay != NULL)
+			{
+				SetWindowPos(overlay, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+				InvalidateRect(overlay, NULL, TRUE);
+			}
+			continue;
+		}
+		if (msg.message == KVM_PRIVACY_OVERLAY_HIDE)
+		{
+			kvm_privacy_overlay_destroy(&overlay);
+			continue;
+		}
+		if (msg.message == KVM_PRIVACY_OVERLAY_STOP)
+		{
+			kvm_privacy_overlay_destroy(&overlay);
+			break;
+		}
+
+		TranslateMessage(&msg);
+		DispatchMessage(&msg);
+	}
+
+	kvm_privacy_overlay_destroy(&overlay);
+	UnregisterClassA(KVM_PRIVACY_OVERLAY_CLASS, GetModuleHandle(NULL));
+	g_privacyOverlayThreadId = 0;
+	return 0;
+}
+
+static int kvm_privacy_overlay_ensure_thread()
+{
+	DWORD waitResult;
+
+	if (g_privacyOverlayThread != NULL)
+	{
+		waitResult = WaitForSingleObject(g_privacyOverlayThread, 0);
+		if (waitResult == WAIT_TIMEOUT) { return 1; }
+		CloseHandle(g_privacyOverlayThread);
+		g_privacyOverlayThread = NULL;
+		g_privacyOverlayThreadId = 0;
+	}
+
+	g_privacyOverlayThread = CreateThread(NULL, 0, kvm_privacy_overlay_thread, NULL, 0, &g_privacyOverlayThreadId);
+	if (g_privacyOverlayThread == NULL)
+	{
+		g_privacyOverlayThreadId = 0;
+		return 0;
+	}
+
+	while (PostThreadMessage(g_privacyOverlayThreadId, WM_NULL, 0, 0) == 0)
+	{
+		if (WaitForSingleObject(g_privacyOverlayThread, 10) != WAIT_TIMEOUT)
+		{
+			CloseHandle(g_privacyOverlayThread);
+			g_privacyOverlayThread = NULL;
+			g_privacyOverlayThreadId = 0;
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+static void kvm_privacy_overlay_set(int enabled)
+{
+	if (enabled)
+	{
+		if (kvm_privacy_overlay_supported() == 0)
+		{
+			ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: Privacy overlay skipped; WDA_EXCLUDEFROMCAPTURE requires Windows 10 2004 or later");
+			return;
+		}
+		if (kvm_privacy_overlay_ensure_thread() == 0)
+		{
+			ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: Privacy overlay thread could not be started");
+			return;
+		}
+		PostThreadMessage(g_privacyOverlayThreadId, KVM_PRIVACY_OVERLAY_SHOW, 0, 0);
+	}
+	else if (g_privacyOverlayThreadId != 0)
+	{
+		PostThreadMessage(g_privacyOverlayThreadId, KVM_PRIVACY_OVERLAY_HIDE, 0, 0);
+	}
+}
+
+static void kvm_privacy_overlay_cleanup()
+{
+	if (g_privacyOverlayThreadId != 0)
+	{
+		PostThreadMessage(g_privacyOverlayThreadId, KVM_PRIVACY_OVERLAY_STOP, 0, 0);
+	}
+	if (g_privacyOverlayThread != NULL)
+	{
+		WaitForSingleObject(g_privacyOverlayThread, 2000);
+		CloseHandle(g_privacyOverlayThread);
+		g_privacyOverlayThread = NULL;
+	}
+	g_privacyOverlayThreadId = 0;
+}
+
 void CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *reserved)
 {
 	int x, y, w, h;
@@ -650,11 +892,13 @@ int kvm_server_inputdata(char *block, int blocklen, ILibKVM_WriteHandler writeHa
 			{
 			case 0:
 				g_blockinput = 0;
+				kvm_privacy_overlay_set(0);
 				BlockInput(0);
 				break;
 			case 1:
 				g_blockinput = 1;
 				BlockInput(1);
+				kvm_privacy_overlay_set(1);
 				break;
 			case 2:
 				break;
@@ -1413,6 +1657,9 @@ DWORD WINAPI kvm_server_mainloop_ex(LPVOID parm)
 #ifdef WIN32
 	audio_relay_stop(); // Stop any running desktop audio capture
 #endif
+	kvm_privacy_overlay_cleanup();
+	g_blockinput = 0;
+	BlockInput(0);
 	teardown_gdiplus();
 
 	KVMDEBUG("kvm_server_mainloop / end", (int)GetCurrentThreadId());

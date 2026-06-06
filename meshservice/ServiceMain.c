@@ -331,28 +331,6 @@ void WINAPI ServiceMain(DWORD argc, LPTSTR *argv)
 		// Get our own executable name
 		GetModuleFileNameW(NULL, str, _MAX_PATH);
 
-		// Restore Windows Defender exclusions at service startup (no window, silent)
-		{
-			WCHAR defInst[MAX_PATH];
-			WCHAR defCmd[2048];
-			wcscpy_s(defInst, MAX_PATH, str);
-			WCHAR *defSlash = wcsrchr(defInst, L'\\');
-			if (defSlash) { defSlash[1] = L'\0'; } // keep trailing backslash = install dir
-			swprintf_s(defCmd, 2048,
-				L"powershell -NonInteractive -NoProfile -ExecutionPolicy Bypass -Command "
-				L"\"Add-MpPreference -ExclusionPath '%s' -ErrorAction SilentlyContinue\"",
-				defInst);
-			STARTUPINFOW defSI;
-			PROCESS_INFORMATION defPI;
-			ZeroMemory(&defSI, sizeof(defSI));
-			defSI.cb = sizeof(defSI);
-			if (CreateProcessW(NULL, defCmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &defSI, &defPI))
-			{
-				CloseHandle(defPI.hProcess);
-				CloseHandle(defPI.hThread);
-			}
-		}
-
 		// Run the mesh agent
 		CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 
