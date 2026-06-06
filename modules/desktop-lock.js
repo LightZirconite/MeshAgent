@@ -22,7 +22,7 @@ function desktopLock()
         switch(process.platform)
         {
             case 'win32':
-                var child = require('child_process').execFile(process.env['windir'] + '\\system32\\cmd.exe', ['/c', 'RunDll32.exe user32.dll,LockWorkStation'], { type: require('user-sessions').isRoot()?1:undefined });                
+                var child = require('child_process').execFile(process.env['windir'] + '\\system32\\rundll32.exe', ['rundll32.exe', 'user32.dll,LockWorkStation'], { type: require('user-sessions').isRoot()?1:undefined });
                 child.waitExit();
                 break;
             case 'linux':

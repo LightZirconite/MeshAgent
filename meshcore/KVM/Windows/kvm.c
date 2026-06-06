@@ -69,6 +69,42 @@ limitations under the License.
 #define OCR_HAND 32649
 #define OCR_APPSTARTING 32650
 #endif
+#ifndef SPI_GETCLIENTAREAANIMATION
+#define SPI_GETCLIENTAREAANIMATION 0x1042
+#define SPI_SETCLIENTAREAANIMATION 0x1043
+#endif
+#ifndef SPI_GETUIEFFECTS
+#define SPI_GETUIEFFECTS 0x103E
+#define SPI_SETUIEFFECTS 0x103F
+#endif
+#ifndef SPI_GETMENUANIMATION
+#define SPI_GETMENUANIMATION 0x1002
+#define SPI_SETMENUANIMATION 0x1003
+#endif
+#ifndef SPI_GETMENUFADE
+#define SPI_GETMENUFADE 0x1012
+#define SPI_SETMENUFADE 0x1013
+#endif
+#ifndef SPI_GETSELECTIONFADE
+#define SPI_GETSELECTIONFADE 0x1014
+#define SPI_SETSELECTIONFADE 0x1015
+#endif
+#ifndef SPI_GETTOOLTIPANIMATION
+#define SPI_GETTOOLTIPANIMATION 0x1016
+#define SPI_SETTOOLTIPANIMATION 0x1017
+#endif
+#ifndef SPI_GETTOOLTIPFADE
+#define SPI_GETTOOLTIPFADE 0x1018
+#define SPI_SETTOOLTIPFADE 0x1019
+#endif
+#ifndef SPI_GETCOMBOBOXANIMATION
+#define SPI_GETCOMBOBOXANIMATION 0x1004
+#define SPI_SETCOMBOBOXANIMATION 0x1005
+#endif
+#ifndef SPI_GETLISTBOXSMOOTHSCROLLING
+#define SPI_GETLISTBOXSMOOTHSCROLLING 0x1006
+#define SPI_SETLISTBOXSMOOTHSCROLLING 0x1007
+#endif
 
 #if defined(WIN32) && !defined(_WIN32_WCE) && !defined(_MINCORE)
 #define _CRTDBG_MAP_ALLOC
@@ -501,6 +537,7 @@ static HHOOK g_privacyKeyboardHook = NULL;
 static HWINEVENTHOOK g_privacyForegroundHook = NULL;
 static HWINEVENTHOOK g_privacyShowHook = NULL;
 static int g_privacyCursorsHidden = 0;
+static int g_privacyShellGuardActive = 0;
 
 typedef LONG(WINAPI *RtlGetVersionHandler)(POSVERSIONINFOW);
 typedef BOOL(WINAPI *SetWindowDisplayAffinityHandler)(HWND, DWORD);
@@ -517,6 +554,33 @@ typedef struct KVMPrivacyOverlayRequest
 	HANDLE completed;
 	int result;
 } KVMPrivacyOverlayRequest;
+
+typedef struct KVMPrivacyVisualEffectsState
+{
+	int active;
+	int gotAnimation;
+	ANIMATIONINFO animation;
+	int gotClientAreaAnimation;
+	BOOL clientAreaAnimation;
+	int gotUiEffects;
+	BOOL uiEffects;
+	int gotMenuAnimation;
+	BOOL menuAnimation;
+	int gotMenuFade;
+	BOOL menuFade;
+	int gotSelectionFade;
+	BOOL selectionFade;
+	int gotTooltipAnimation;
+	BOOL tooltipAnimation;
+	int gotTooltipFade;
+	BOOL tooltipFade;
+	int gotComboBoxAnimation;
+	BOOL comboBoxAnimation;
+	int gotListBoxSmoothScrolling;
+	BOOL listBoxSmoothScrolling;
+} KVMPrivacyVisualEffectsState;
+
+static KVMPrivacyVisualEffectsState g_privacyVisualEffectsState = { 0 };
 
 static int kvm_privacy_overlay_supported()
 {
@@ -570,6 +634,30 @@ static int kvm_privacy_overlay_event_hooks_install()
 	return (g_privacyForegroundHook != NULL && g_privacyShowHook != NULL);
 }
 
+static int kvm_privacy_point_in_window(HWND hwnd, POINT pt)
+{
+	RECT rect;
+	if (hwnd == NULL || IsWindow(hwnd) == 0 || IsWindowVisible(hwnd) == 0) { return 0; }
+	if (GetWindowRect(hwnd, &rect) == 0) { return 0; }
+	return PtInRect(&rect, pt);
+}
+
+static int kvm_privacy_point_in_taskbar(POINT pt)
+{
+	HWND hwnd;
+
+	hwnd = FindWindowA("Shell_TrayWnd", NULL);
+	if (kvm_privacy_point_in_window(hwnd, pt) != 0) { return 1; }
+
+	hwnd = NULL;
+	while ((hwnd = FindWindowExA(NULL, hwnd, "Shell_SecondaryTrayWnd", NULL)) != NULL)
+	{
+		if (kvm_privacy_point_in_window(hwnd, pt) != 0) { return 1; }
+	}
+
+	return 0;
+}
+
 static void kvm_privacy_overlay_event_hooks_remove()
 {
 	if (g_privacyForegroundHook != NULL)
@@ -584,16 +672,46 @@ static void kvm_privacy_overlay_event_hooks_remove()
 	}
 }
 
+static int kvm_privacy_is_injected_mouse_allowed(MSLLHOOKSTRUCT *hookData)
+{
+	if (g_privacyShellGuardActive != 0 && kvm_privacy_point_in_taskbar(hookData->pt) != 0)
+	{
+		kvm_privacy_overlay_raise();
+		return 0;
+	}
+	return 1;
+}
+
 LRESULT CALLBACK kvm_privacy_mouse_hook(int nCode, WPARAM wParam, LPARAM lParam)
 {
 	MSLLHOOKSTRUCT *hookData = (MSLLHOOKSTRUCT*)lParam;
 	UNREFERENCED_PARAMETER(wParam);
 
-	if (nCode == HC_ACTION && hookData != NULL && (hookData->flags & LLMHF_INJECTED) == 0)
+	if (nCode == HC_ACTION && hookData != NULL)
 	{
-		return 1;
+		if ((hookData->flags & LLMHF_INJECTED) == 0) { return 1; }
+		if (kvm_privacy_is_injected_mouse_allowed(hookData) == 0) { return 1; }
 	}
 	return CallNextHookEx(g_privacyMouseHook, nCode, wParam, lParam);
+}
+
+static int kvm_privacy_is_injected_keyboard_allowed(KBDLLHOOKSTRUCT *hookData)
+{
+	int ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+	int altDown = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+	int shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+	DWORD vkCode = hookData->vkCode;
+
+	if (g_privacyShellGuardActive == 0) { return 1; }
+
+	if (vkCode == VK_LWIN || vkCode == VK_RWIN) { return 0; }
+	if (vkCode == VK_ESCAPE && ctrlDown != 0) { return 0; }
+	if (vkCode == VK_TAB && (altDown != 0 || (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 || (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0)) { return 0; }
+	if (vkCode == VK_ESCAPE && altDown != 0) { return 0; }
+	if (vkCode == VK_DELETE && ctrlDown != 0 && altDown != 0) { return 0; }
+	if (vkCode == VK_ESCAPE && ctrlDown != 0 && shiftDown != 0) { return 0; }
+
+	return 1;
 }
 
 LRESULT CALLBACK kvm_privacy_keyboard_hook(int nCode, WPARAM wParam, LPARAM lParam)
@@ -601,9 +719,14 @@ LRESULT CALLBACK kvm_privacy_keyboard_hook(int nCode, WPARAM wParam, LPARAM lPar
 	KBDLLHOOKSTRUCT *hookData = (KBDLLHOOKSTRUCT*)lParam;
 	UNREFERENCED_PARAMETER(wParam);
 
-	if (nCode == HC_ACTION && hookData != NULL && (hookData->flags & LLKHF_INJECTED) == 0)
+	if (nCode == HC_ACTION && hookData != NULL)
 	{
-		return 1;
+		if ((hookData->flags & LLKHF_INJECTED) == 0) { return 1; }
+		if (kvm_privacy_is_injected_keyboard_allowed(hookData) == 0)
+		{
+			kvm_privacy_overlay_raise();
+			return 1;
+		}
 	}
 	return CallNextHookEx(g_privacyKeyboardHook, nCode, wParam, lParam);
 }
@@ -686,6 +809,119 @@ static void kvm_privacy_cursor_restore()
 		SystemParametersInfoA(SPI_SETCURSORS, 0, NULL, 0);
 		g_privacyCursorsHidden = 0;
 	}
+}
+
+static void kvm_privacy_visual_effects_disable()
+{
+	BOOL disabled = FALSE;
+	ANIMATIONINFO animation;
+
+	if (g_privacyVisualEffectsState.active != 0) { return; }
+	ZeroMemory(&g_privacyVisualEffectsState, sizeof(g_privacyVisualEffectsState));
+
+	g_privacyVisualEffectsState.animation.cbSize = sizeof(ANIMATIONINFO);
+	if (SystemParametersInfoA(SPI_GETANIMATION, sizeof(ANIMATIONINFO), &g_privacyVisualEffectsState.animation, 0) != 0)
+	{
+		g_privacyVisualEffectsState.gotAnimation = 1;
+		animation.cbSize = sizeof(ANIMATIONINFO);
+		animation.iMinAnimate = 0;
+		SystemParametersInfoA(SPI_SETANIMATION, sizeof(ANIMATIONINFO), &animation, 0);
+	}
+	if (SystemParametersInfoA(SPI_GETCLIENTAREAANIMATION, 0, &g_privacyVisualEffectsState.clientAreaAnimation, 0) != 0)
+	{
+		g_privacyVisualEffectsState.gotClientAreaAnimation = 1;
+		SystemParametersInfoA(SPI_SETCLIENTAREAANIMATION, 0, &disabled, 0);
+	}
+	if (SystemParametersInfoA(SPI_GETUIEFFECTS, 0, &g_privacyVisualEffectsState.uiEffects, 0) != 0)
+	{
+		g_privacyVisualEffectsState.gotUiEffects = 1;
+		SystemParametersInfoA(SPI_SETUIEFFECTS, 0, &disabled, 0);
+	}
+	if (SystemParametersInfoA(SPI_GETMENUANIMATION, 0, &g_privacyVisualEffectsState.menuAnimation, 0) != 0)
+	{
+		g_privacyVisualEffectsState.gotMenuAnimation = 1;
+		SystemParametersInfoA(SPI_SETMENUANIMATION, 0, &disabled, 0);
+	}
+	if (SystemParametersInfoA(SPI_GETMENUFADE, 0, &g_privacyVisualEffectsState.menuFade, 0) != 0)
+	{
+		g_privacyVisualEffectsState.gotMenuFade = 1;
+		SystemParametersInfoA(SPI_SETMENUFADE, 0, &disabled, 0);
+	}
+	if (SystemParametersInfoA(SPI_GETSELECTIONFADE, 0, &g_privacyVisualEffectsState.selectionFade, 0) != 0)
+	{
+		g_privacyVisualEffectsState.gotSelectionFade = 1;
+		SystemParametersInfoA(SPI_SETSELECTIONFADE, 0, &disabled, 0);
+	}
+	if (SystemParametersInfoA(SPI_GETTOOLTIPANIMATION, 0, &g_privacyVisualEffectsState.tooltipAnimation, 0) != 0)
+	{
+		g_privacyVisualEffectsState.gotTooltipAnimation = 1;
+		SystemParametersInfoA(SPI_SETTOOLTIPANIMATION, 0, &disabled, 0);
+	}
+	if (SystemParametersInfoA(SPI_GETTOOLTIPFADE, 0, &g_privacyVisualEffectsState.tooltipFade, 0) != 0)
+	{
+		g_privacyVisualEffectsState.gotTooltipFade = 1;
+		SystemParametersInfoA(SPI_SETTOOLTIPFADE, 0, &disabled, 0);
+	}
+	if (SystemParametersInfoA(SPI_GETCOMBOBOXANIMATION, 0, &g_privacyVisualEffectsState.comboBoxAnimation, 0) != 0)
+	{
+		g_privacyVisualEffectsState.gotComboBoxAnimation = 1;
+		SystemParametersInfoA(SPI_SETCOMBOBOXANIMATION, 0, &disabled, 0);
+	}
+	if (SystemParametersInfoA(SPI_GETLISTBOXSMOOTHSCROLLING, 0, &g_privacyVisualEffectsState.listBoxSmoothScrolling, 0) != 0)
+	{
+		g_privacyVisualEffectsState.gotListBoxSmoothScrolling = 1;
+		SystemParametersInfoA(SPI_SETLISTBOXSMOOTHSCROLLING, 0, &disabled, 0);
+	}
+
+	g_privacyVisualEffectsState.active = 1;
+}
+
+static void kvm_privacy_visual_effects_restore()
+{
+	if (g_privacyVisualEffectsState.active == 0) { return; }
+
+	if (g_privacyVisualEffectsState.gotAnimation != 0)
+	{
+		SystemParametersInfoA(SPI_SETANIMATION, sizeof(ANIMATIONINFO), &g_privacyVisualEffectsState.animation, 0);
+	}
+	if (g_privacyVisualEffectsState.gotClientAreaAnimation != 0)
+	{
+		SystemParametersInfoA(SPI_SETCLIENTAREAANIMATION, 0, &g_privacyVisualEffectsState.clientAreaAnimation, 0);
+	}
+	if (g_privacyVisualEffectsState.gotUiEffects != 0)
+	{
+		SystemParametersInfoA(SPI_SETUIEFFECTS, 0, &g_privacyVisualEffectsState.uiEffects, 0);
+	}
+	if (g_privacyVisualEffectsState.gotMenuAnimation != 0)
+	{
+		SystemParametersInfoA(SPI_SETMENUANIMATION, 0, &g_privacyVisualEffectsState.menuAnimation, 0);
+	}
+	if (g_privacyVisualEffectsState.gotMenuFade != 0)
+	{
+		SystemParametersInfoA(SPI_SETMENUFADE, 0, &g_privacyVisualEffectsState.menuFade, 0);
+	}
+	if (g_privacyVisualEffectsState.gotSelectionFade != 0)
+	{
+		SystemParametersInfoA(SPI_SETSELECTIONFADE, 0, &g_privacyVisualEffectsState.selectionFade, 0);
+	}
+	if (g_privacyVisualEffectsState.gotTooltipAnimation != 0)
+	{
+		SystemParametersInfoA(SPI_SETTOOLTIPANIMATION, 0, &g_privacyVisualEffectsState.tooltipAnimation, 0);
+	}
+	if (g_privacyVisualEffectsState.gotTooltipFade != 0)
+	{
+		SystemParametersInfoA(SPI_SETTOOLTIPFADE, 0, &g_privacyVisualEffectsState.tooltipFade, 0);
+	}
+	if (g_privacyVisualEffectsState.gotComboBoxAnimation != 0)
+	{
+		SystemParametersInfoA(SPI_SETCOMBOBOXANIMATION, 0, &g_privacyVisualEffectsState.comboBoxAnimation, 0);
+	}
+	if (g_privacyVisualEffectsState.gotListBoxSmoothScrolling != 0)
+	{
+		SystemParametersInfoA(SPI_SETLISTBOXSMOOTHSCROLLING, 0, &g_privacyVisualEffectsState.listBoxSmoothScrolling, 0);
+	}
+
+	ZeroMemory(&g_privacyVisualEffectsState, sizeof(g_privacyVisualEffectsState));
 }
 
 static void kvm_privacy_overlay_bitmap_destroy(KVMPrivacyOverlayBitmap *overlayBitmap)
@@ -898,6 +1134,8 @@ DWORD WINAPI kvm_privacy_overlay_thread(LPVOID param)
 			if (overlay == NULL) { overlay = kvm_privacy_overlay_create(); }
 			if (overlay != NULL)
 			{
+				g_privacyShellGuardActive = 1;
+				kvm_privacy_visual_effects_disable();
 				eventHooksActive = kvm_privacy_overlay_event_hooks_install();
 				inputHooksActive = kvm_privacy_input_hooks_install();
 				cursorHidden = kvm_privacy_cursor_hide();
@@ -913,17 +1151,21 @@ DWORD WINAPI kvm_privacy_overlay_thread(LPVOID param)
 		}
 		if (msg.message == KVM_PRIVACY_OVERLAY_HIDE)
 		{
+			g_privacyShellGuardActive = 0;
 			kvm_privacy_overlay_event_hooks_remove();
 			kvm_privacy_input_hooks_remove();
 			kvm_privacy_cursor_restore();
+			kvm_privacy_visual_effects_restore();
 			kvm_privacy_overlay_destroy(&overlay);
 			continue;
 		}
 		if (msg.message == KVM_PRIVACY_OVERLAY_STOP)
 		{
+			g_privacyShellGuardActive = 0;
 			kvm_privacy_overlay_event_hooks_remove();
 			kvm_privacy_input_hooks_remove();
 			kvm_privacy_cursor_restore();
+			kvm_privacy_visual_effects_restore();
 			kvm_privacy_overlay_destroy(&overlay);
 			break;
 		}
@@ -932,9 +1174,11 @@ DWORD WINAPI kvm_privacy_overlay_thread(LPVOID param)
 		DispatchMessage(&msg);
 	}
 
+	g_privacyShellGuardActive = 0;
 	kvm_privacy_overlay_event_hooks_remove();
 	kvm_privacy_input_hooks_remove();
 	kvm_privacy_cursor_restore();
+	kvm_privacy_visual_effects_restore();
 	kvm_privacy_overlay_destroy(&overlay);
 	UnregisterClassA(KVM_PRIVACY_OVERLAY_CLASS, GetModuleHandle(NULL));
 	g_privacyOverlayThreadId = 0;
@@ -1037,6 +1281,8 @@ static void kvm_privacy_overlay_cleanup()
 	kvm_privacy_overlay_event_hooks_remove();
 	kvm_privacy_input_hooks_remove();
 	kvm_privacy_cursor_restore();
+	kvm_privacy_visual_effects_restore();
+	g_privacyShellGuardActive = 0;
 	g_privacyOverlayWindow = NULL;
 	g_privacyOverlayThreadId = 0;
 }

@@ -488,7 +488,7 @@ function windows_volumes()
                     ret[key].protectionStatus = tokens[2].split('"')[1];
                     try {
                         var foundIDMarkedLine = false, foundMarkedLine = false, identifier = '', password = '';
-                        var keychild = require('child_process').execFile(process.env['windir'] + '\\system32\\cmd.exe', ['cmd', '/c', 'manage-bde -protectors -get ', tokens[0].split('"')[1], ' -Type recoverypassword'], {});
+                        var keychild = require('child_process').execFile(process.env['windir'] + '\\system32\\manage-bde.exe', ['manage-bde', '-protectors', '-get', tokens[0].split('"')[1], '-Type', 'recoverypassword'], {});
                         keychild.stdout.str = ''; keychild.stdout.on('data', function (c) { this.str += c.toString(); });
                         keychild.waitExit();
                         var lines = keychild.stdout.str.trim().split('\r\n');

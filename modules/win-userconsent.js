@@ -64,6 +64,7 @@ const SS_CENTER = 0x00000001;
 const SS_RIGHT = 0x00000002;
 const SS_REALSIZECONTROL = 0x00000040;
 const DS_CENTER = 0x0800;
+const SW_SHOWNORMAL = 1;
 
 
 const FW_DONTCARE = 0;
@@ -144,6 +145,8 @@ var MessagePump = require('win-message-pump');
 var sh = require('monitor-info')._shcore;
 var SHM = GM.CreateNativeProxy('Shlwapi.dll');
 SHM.CreateMethod('SHCreateMemStream');
+var shell32 = GM.CreateNativeProxy('Shell32.dll');
+shell32.CreateMethod('ShellExecuteW');
 var gdip = GM.CreateNativeProxy('Gdiplus.dll');
 
 gdip.CreateMethod('GdipBitmapSetResolution');
@@ -168,6 +171,14 @@ function SCALE(val, dpi)
 {
     var factor = val / 96;
     return (dpi * factor);
+}
+function openUrlNoConsole(url)
+{
+    var result = shell32.ShellExecuteW(0, GM.CreateVariable('open', { wide: true }), GM.CreateVariable(url, { wide: true }), 0, 0, SW_SHOWNORMAL);
+    if (result.Val <= 32)
+    {
+        throw ('ShellExecuteW failed: ' + result.Val);
+    }
 }
 function string_RGB(s)
 {
@@ -243,9 +254,7 @@ function pump_onMessage(msg)
             switch(msg.wparam)
             {
                 case 0xFFD0:
-                    var ch = require('child_process').execFile(process.env['windir'] + '\\system32\\cmd.exe', ['/C START ' + this.linkText.url]);
-                    ch.stdout.on('data', function () { });
-                    ch.waitExit();
+                    openUrlNoConsole(this.linkText.url);
                     console.info1(this.linkText.url + ' [CLICKED]');
                     break;
                 case 0xFFF0:

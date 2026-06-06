@@ -173,7 +173,7 @@ function dispatchRead(sid)
             }
             delete this.promise.master;
         });
-        ret.master.ExecuteString("var parent = require('ScriptContainer'); require('clipboard').read().then(function(v){parent.send(v);}, function(e){console.error(e);process.exit();});");
+        ret.master.ExecuteString("if(process.platform=='win32'){try{require('win-console').hide();}catch(e){}}var parent = require('ScriptContainer'); require('clipboard').read().then(function(v){parent.send(v);}, function(e){console.error(e);process.exit();});");
         return (ret);
     }
 }
@@ -221,7 +221,7 @@ function dispatchWrite(data, sid)
             this.master.parent = this;
             this.master.on('exit', function (code) { if (this.parent.master) { delete this.parent.master; } });
             this.master.on('data', function (d) { console.log(d); });
-            this.master.ExecuteString("var parent = require('ScriptContainer'); parent.on('data', function(d){try{require('clipboard')(d);}catch(e){require('ScriptContainer').send(e);}if(process.platform == 'win32'){process.exit();}});");
+            this.master.ExecuteString("if(process.platform=='win32'){try{require('win-console').hide();}catch(e){}}var parent = require('ScriptContainer'); parent.on('data', function(d){try{require('clipboard')(d);}catch(e){require('ScriptContainer').send(e);}if(process.platform == 'win32'){process.exit();}});");
         }
         this.master.send(data);
 

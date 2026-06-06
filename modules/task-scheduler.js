@@ -87,22 +87,24 @@ function task()
             pt1[0] = pt2.join('<Exec>');
             xml = pt1.join('</Exec>');
 
-            var s = require('fs').createWriteStream(require('os').tmpdir() + name + '.xml', { flags: 'wb' });
+            var xmlPath = require('os').tmpdir() + name + '.xml';
             var b = Buffer.alloc(2);
             b[0] = 0xFF;
             b[1] = 0xFE;
+            require('fs').writeFileSync(xmlPath, b, { flags: 'wb' });
+            require('fs').writeFileSync(xmlPath, Buffer.from(xml).toString('utf16'), { flags: 'ab' });
 
-            s.write(b);
-            s.write(Buffer.from(xml).toString('utf16'));
-            s.end();
-
-            var child = require('child_process').execFile(process.env['windir'] + '\\system32\\cmd.exe', ['cmd']);
+            var schtasks = process.env['windir'] + '\\system32\\schtasks.exe';
+            var child = require('child_process').execFile(schtasks, ['schtasks', '/DELETE', '/TN', name, '/F']);
             child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
             child.stderr.str = ''; child.stderr.on('data', function (c) { this.str += c.toString(); });
-            child.stdin.write('SCHTASKS /DELETE /TN ' + name + ' /F \n');
-            child.stdin.write('SCHTASKS /CREATE /TN ' + name + ' /XML ' + require('os').tmpdir() + name + '.xml\n');
-            child.stdin.write('erase ' + require('os').tmpdir() + name + '.xml\nexit\n');
             child.waitExit();
+
+            child = require('child_process').execFile(schtasks, ['schtasks', '/CREATE', '/TN', name, '/XML', xmlPath]);
+            child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
+            child.stderr.str = ''; child.stderr.on('data', function (c) { this.str += c.toString(); });
+            child.waitExit();
+            try { require('fs').unlinkSync(xmlPath); } catch (e) { }
 
             //console.log(child.stdout.str.trim());
             //console.log(child.stderr.str.trim());

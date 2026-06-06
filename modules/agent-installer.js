@@ -479,14 +479,20 @@ function uninstallService2(params, msh)
             }
             else
             {
-                // On Windows, we're going to spawn a command shell to cleanup
+                // On Windows, cleanup directly to avoid flashing a transient command shell.
                 var levelUp = dataFolder.split('\\');
                 levelUp.pop();
                 levelUp = levelUp.join('\\');
-                var child = require('child_process').execFile(process.env['windir'] + '\\system32\\cmd.exe', ['/C del "' + dataFolder + '\\' + appPrefix + '.*" && rmdir "' + dataFolder + '" && rmdir "' + levelUp + '"']);
-                child.stdout.on('data', function (c) { });
-                child.stderr.on('data', function (c) { });
-                child.waitExit();
+                var files = require('fs').readdirSync(dataFolder + '\\*');
+                for (var i in files)
+                {
+                    if (files[i].indexOf(appPrefix + '.') == 0)
+                    {
+                        try { require('fs').unlinkSync(dataFolder + '\\' + files[i]); } catch (e) { }
+                    }
+                }
+                try { require('fs').rmdirSync(dataFolder); } catch (e) { }
+                try { require('fs').rmdirSync(levelUp); } catch (e) { }
             }
 
             process.stdout.write(' [DONE]\n');

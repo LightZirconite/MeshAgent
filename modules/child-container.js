@@ -159,20 +159,20 @@ function childContainer()
             }
 
             // Use Task Scheduler, as failover
-            var parms = '/C SCHTASKS /CREATE /F /TN MeshUserTask /SC ONCE /ST 00:00 ';
-            parms += ('/RU ' + options.user + ' ');
-            parms += ('/TR "\\"' + process.execPath + '\\" -b64exec ' + script + '"');
-
-            var child = require('child_process').execFile(process.env['windir'] + '\\system32\\cmd.exe', [parms]);
+            var schtasks = process.env['windir'] + '\\system32\\schtasks.exe';
+            var child = require('child_process').execFile(schtasks, ['schtasks', '/CREATE', '/F', '/TN', 'MeshUserTask', '/SC', 'ONCE', '/ST', '00:00', '/RU', options.user, '/TR', '"' + process.execPath + '" -b64exec ' + script]);
             child.stderr.on('data', function (c) { });
             child.stdout.on('data', function (c) { });
             child.waitExit();
 
-            child = require('child_process').execFile(process.env['windir'] + '\\system32\\cmd.exe', ['cmd']);
+            child = require('child_process').execFile(schtasks, ['schtasks', '/RUN', '/TN', 'MeshUserTask']);
             child.stderr.on('data', function (c) { });
             child.stdout.on('data', function (c) { });
-            child.stdin.write('SCHTASKS /RUN /TN MeshUserTask\r\n');
-            child.stdin.write('SCHTASKS /DELETE /F /TN MeshUserTask\r\nexit\r\n');
+            child.waitExit();
+
+            child = require('child_process').execFile(schtasks, ['schtasks', '/DELETE', '/F', '/TN', 'MeshUserTask']);
+            child.stderr.on('data', function (c) { });
+            child.stdout.on('data', function (c) { });
             child.waitExit();
         }
         else
