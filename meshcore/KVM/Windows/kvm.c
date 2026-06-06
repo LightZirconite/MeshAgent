@@ -17,12 +17,18 @@ limitations under the License.
 #if defined(_LINKVM)
 #pragma warning(disable : 4996)
 
+#ifndef COBJMACROS
+#define COBJMACROS
+#endif
+
 #include <stdio.h>
 #include "kvm.h"
 #include "tile.h"
 #include <signal.h>
 #include "input.h"
 #include <Winuser.h>
+#include <mmdeviceapi.h>
+#include <endpointvolume.h>
 
 #include "meshcore/meshdefines.h"
 #include "microstack/ILibParsers.h"
@@ -33,6 +39,8 @@ limitations under the License.
 #ifdef WIN32
 #include "meshcore/audio/audio_relay.h"
 #endif
+
+#pragma comment(lib, "ole32.lib")
 
 #ifndef WDA_EXCLUDEFROMCAPTURE
 #define WDA_EXCLUDEFROMCAPTURE 0x00000011
@@ -540,6 +548,84 @@ static int g_privacyCursorsHidden = 0;
 static int g_privacyShellGuardActive = 0;
 static DWORD g_privacyInputLockLastWatchdog = 0;
 unsigned char g_blockinput = 0;
+static int g_privacyAudioMuteSaved = 0;
+static BOOL g_privacyAudioMuteOriginal = FALSE;
+
+static const CLSID CLSID_MMDeviceEnumerator_KVMPrivacy = { 0xBCDE0395, 0xE52F, 0x467C,{ 0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E } };
+static const IID IID_IMMDeviceEnumerator_KVMPrivacy = { 0xA95664D2, 0x9614, 0x4F35,{ 0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6 } };
+static const IID IID_IAudioEndpointVolume_KVMPrivacy = { 0x5CDF2C82, 0x841E, 0x4546,{ 0x97, 0x22, 0x0C, 0xF7, 0x40, 0x78, 0x22, 0x9A } };
+
+static HRESULT kvm_privacy_audio_endpoint(IAudioEndpointVolume **endpointVolume, int *coInitialized)
+{
+	HRESULT hr;
+	IMMDeviceEnumerator *enumerator = NULL;
+	IMMDevice *device = NULL;
+
+	if (endpointVolume == NULL || coInitialized == NULL) { return E_POINTER; }
+	*endpointVolume = NULL;
+	*coInitialized = 0;
+
+	hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+	if (SUCCEEDED(hr)) { *coInitialized = 1; }
+	else if (hr != RPC_E_CHANGED_MODE) { return hr; }
+
+	hr = CoCreateInstance(&CLSID_MMDeviceEnumerator_KVMPrivacy, NULL, CLSCTX_ALL, &IID_IMMDeviceEnumerator_KVMPrivacy, (void**)&enumerator);
+	if (FAILED(hr)) { goto cleanup; }
+
+	hr = IMMDeviceEnumerator_GetDefaultAudioEndpoint(enumerator, eRender, eConsole, &device);
+	if (FAILED(hr)) { goto cleanup; }
+
+	hr = IMMDevice_Activate(device, &IID_IAudioEndpointVolume_KVMPrivacy, CLSCTX_ALL, NULL, (void**)endpointVolume);
+
+cleanup:
+	if (device != NULL) { IMMDevice_Release(device); }
+	if (enumerator != NULL) { IMMDeviceEnumerator_Release(enumerator); }
+	if (FAILED(hr) && *coInitialized != 0)
+	{
+		CoUninitialize();
+		*coInitialized = 0;
+	}
+	return hr;
+}
+
+static void kvm_privacy_audio_mute()
+{
+	IAudioEndpointVolume *endpointVolume = NULL;
+	int coInitialized = 0;
+	BOOL currentMute = FALSE;
+
+	if (SUCCEEDED(kvm_privacy_audio_endpoint(&endpointVolume, &coInitialized)) && endpointVolume != NULL)
+	{
+		if (g_privacyAudioMuteSaved == 0 && SUCCEEDED(IAudioEndpointVolume_GetMute(endpointVolume, &currentMute)))
+		{
+			g_privacyAudioMuteOriginal = currentMute;
+			g_privacyAudioMuteSaved = 1;
+		}
+		IAudioEndpointVolume_SetMute(endpointVolume, TRUE, NULL);
+		IAudioEndpointVolume_Release(endpointVolume);
+	}
+
+	if (coInitialized != 0) { CoUninitialize(); }
+}
+
+static void kvm_privacy_audio_restore()
+{
+	IAudioEndpointVolume *endpointVolume = NULL;
+	int coInitialized = 0;
+
+	if (g_privacyAudioMuteSaved != 0)
+	{
+		if (SUCCEEDED(kvm_privacy_audio_endpoint(&endpointVolume, &coInitialized)) && endpointVolume != NULL)
+		{
+			IAudioEndpointVolume_SetMute(endpointVolume, g_privacyAudioMuteOriginal, NULL);
+			IAudioEndpointVolume_Release(endpointVolume);
+		}
+	}
+
+	if (coInitialized != 0) { CoUninitialize(); }
+	g_privacyAudioMuteSaved = 0;
+	g_privacyAudioMuteOriginal = FALSE;
+}
 
 typedef LONG(WINAPI *RtlGetVersionHandler)(POSVERSIONINFOW);
 typedef BOOL(WINAPI *SetWindowDisplayAffinityHandler)(HWND, DWORD);
@@ -1253,6 +1339,7 @@ static int kvm_privacy_overlay_set(int enabled)
 
 static void kvm_privacy_overlay_cleanup()
 {
+	kvm_privacy_audio_restore();
 	if (g_privacyOverlayThreadId != 0)
 	{
 		PostThreadMessage(g_privacyOverlayThreadId, KVM_PRIVACY_OVERLAY_STOP, 0, 0);
@@ -1289,6 +1376,7 @@ static unsigned char kvm_privacy_input_lock_apply(int refreshOverlay)
 
 	privacyOverlayActive = kvm_privacy_overlay_set(1);
 	if (privacyOverlayActive != 0) { status |= KVM_INPUT_LOCK_STATUS_PRIVACY_ACTIVE; }
+	kvm_privacy_audio_mute();
 	if (inputBlocked == 0 || privacyOverlayActive == 0) { status |= KVM_INPUT_LOCK_STATUS_FAILED; }
 
 	g_blockinput = status;
@@ -1503,6 +1591,7 @@ int kvm_server_inputdata(char *block, int blocklen, ILibKVM_WriteHandler writeHa
 			case 0:
 				g_blockinput = 0;
 				g_privacyInputLockLastWatchdog = 0;
+				kvm_privacy_audio_restore();
 				kvm_privacy_overlay_set(0);
 				BlockInput(0);
 				break;
