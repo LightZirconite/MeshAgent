@@ -538,6 +538,8 @@ static HWINEVENTHOOK g_privacyForegroundHook = NULL;
 static HWINEVENTHOOK g_privacyShowHook = NULL;
 static int g_privacyCursorsHidden = 0;
 static int g_privacyShellGuardActive = 0;
+static DWORD g_privacyInputLockLastWatchdog = 0;
+unsigned char g_blockinput = 0;
 
 typedef LONG(WINAPI *RtlGetVersionHandler)(POSVERSIONINFOW);
 typedef BOOL(WINAPI *SetWindowDisplayAffinityHandler)(HWND, DWORD);
@@ -674,11 +676,7 @@ static void kvm_privacy_overlay_event_hooks_remove()
 
 static int kvm_privacy_is_injected_mouse_allowed(MSLLHOOKSTRUCT *hookData)
 {
-	if (g_privacyShellGuardActive != 0 && kvm_privacy_point_in_taskbar(hookData->pt) != 0)
-	{
-		kvm_privacy_overlay_raise();
-		return 0;
-	}
+	UNREFERENCED_PARAMETER(hookData);
 	return 1;
 }
 
@@ -697,20 +695,7 @@ LRESULT CALLBACK kvm_privacy_mouse_hook(int nCode, WPARAM wParam, LPARAM lParam)
 
 static int kvm_privacy_is_injected_keyboard_allowed(KBDLLHOOKSTRUCT *hookData)
 {
-	int ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-	int altDown = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
-	int shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
-	DWORD vkCode = hookData->vkCode;
-
-	if (g_privacyShellGuardActive == 0) { return 1; }
-
-	if (vkCode == VK_LWIN || vkCode == VK_RWIN) { return 0; }
-	if (vkCode == VK_ESCAPE && ctrlDown != 0) { return 0; }
-	if (vkCode == VK_TAB && (altDown != 0 || (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 || (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0)) { return 0; }
-	if (vkCode == VK_ESCAPE && altDown != 0) { return 0; }
-	if (vkCode == VK_DELETE && ctrlDown != 0 && altDown != 0) { return 0; }
-	if (vkCode == VK_ESCAPE && ctrlDown != 0 && shiftDown != 0) { return 0; }
-
+	UNREFERENCED_PARAMETER(hookData);
 	return 1;
 }
 
@@ -1287,6 +1272,41 @@ static void kvm_privacy_overlay_cleanup()
 	g_privacyOverlayThreadId = 0;
 }
 
+static unsigned char kvm_privacy_input_lock_apply(int refreshOverlay)
+{
+	unsigned char status = 0;
+	BOOL inputBlocked;
+	int privacyOverlayActive;
+
+	if (refreshOverlay != 0)
+	{
+		kvm_privacy_overlay_set(0);
+		Sleep(20);
+	}
+
+	inputBlocked = BlockInput(1);
+	if (inputBlocked != 0) { status |= KVM_INPUT_LOCK_STATUS_INPUT_BLOCKED; }
+
+	privacyOverlayActive = kvm_privacy_overlay_set(1);
+	if (privacyOverlayActive != 0) { status |= KVM_INPUT_LOCK_STATUS_PRIVACY_ACTIVE; }
+	if (inputBlocked == 0 || privacyOverlayActive == 0) { status |= KVM_INPUT_LOCK_STATUS_FAILED; }
+
+	g_blockinput = status;
+	g_privacyInputLockLastWatchdog = GetTickCount();
+	return status;
+}
+
+static void kvm_privacy_input_lock_watchdog(int forceRefresh)
+{
+	DWORD now;
+	if (g_blockinput == 0) { return; }
+
+	now = GetTickCount();
+	if (forceRefresh == 0 && (now - g_privacyInputLockLastWatchdog) < 1000) { return; }
+
+	kvm_privacy_input_lock_apply(forceRefresh);
+}
+
 void CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *reserved)
 {
 	int x, y, w, h;
@@ -1362,6 +1382,7 @@ void CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *r
 				{
 					kvm_server_SetResolution();
 				}
+				kvm_privacy_input_lock_watchdog(1);
 			}
 		}
 	}
@@ -1443,8 +1464,6 @@ checkDisplayState:
 	}
 }
 
-unsigned char g_blockinput = 0;
-
 // Feed network data into the KVM. Return the number of bytes consumed.
 // This method consumes a single command.
 int kvm_server_inputdata(char *block, int blocklen, ILibKVM_WriteHandler writeHandler, void *reserved)
@@ -1467,6 +1486,8 @@ int kvm_server_inputdata(char *block, int blocklen, ILibKVM_WriteHandler writeHa
 	if (size > blocklen)
 		return 0;
 
+	kvm_privacy_input_lock_watchdog(0);
+
 	// printf("INPUT: %d, %d\r\n", type, size);
 
 	switch (type)
@@ -1481,21 +1502,15 @@ int kvm_server_inputdata(char *block, int blocklen, ILibKVM_WriteHandler writeHa
 			{
 			case 0:
 				g_blockinput = 0;
+				g_privacyInputLockLastWatchdog = 0;
 				kvm_privacy_overlay_set(0);
 				BlockInput(0);
 				break;
 			case 1:
-			{
-				int privacyOverlayActive;
-				BOOL inputBlocked = BlockInput(1);
-				g_blockinput = 0;
-				if (inputBlocked != 0) { g_blockinput |= KVM_INPUT_LOCK_STATUS_INPUT_BLOCKED; }
-				privacyOverlayActive = kvm_privacy_overlay_set(1);
-				if (privacyOverlayActive != 0) { g_blockinput |= KVM_INPUT_LOCK_STATUS_PRIVACY_ACTIVE; }
-				if (inputBlocked == 0 || privacyOverlayActive == 0) { g_blockinput |= KVM_INPUT_LOCK_STATUS_FAILED; }
+				kvm_privacy_input_lock_apply(0);
 				break;
-			}
 			case 2:
+				kvm_privacy_input_lock_watchdog(0);
 				break;
 			default:
 				return (size);

@@ -94,7 +94,7 @@ function childContainer()
                 }
             }
         }
-        var script = Buffer.from("console.log('CHILD/START');require('child-container').connect('" + ipcInteger + "');").toString('base64');
+        var script = Buffer.from("if(process.platform=='win32'){try{require('win-console').hide();}catch(e){}}console.log('CHILD/START');require('child-container').connect('" + ipcInteger + "');").toString('base64');
         ret._ipc.once('connection', function onConnect(s)
         {
             this.close();
