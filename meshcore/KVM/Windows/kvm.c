@@ -43,10 +43,32 @@ limitations under the License.
 #define KVM_PRIVACY_OVERLAY_HIDE (WM_APP + 0x251)
 #define KVM_PRIVACY_OVERLAY_STOP (WM_APP + 0x252)
 #define KVM_PRIVACY_OVERLAY_TIMER_ID 1
-#define KVM_PRIVACY_OVERLAY_TIMER_MS 250
+#define KVM_PRIVACY_OVERLAY_TIMER_MS 16
 #define KVM_INPUT_LOCK_STATUS_INPUT_BLOCKED 0x01
 #define KVM_INPUT_LOCK_STATUS_PRIVACY_ACTIVE 0x02
 #define KVM_INPUT_LOCK_STATUS_FAILED 0x04
+
+#ifndef LLMHF_INJECTED
+#define LLMHF_INJECTED 0x00000001
+#endif
+#ifndef LLKHF_INJECTED
+#define LLKHF_INJECTED 0x00000010
+#endif
+#ifndef OCR_NORMAL
+#define OCR_NORMAL 32512
+#define OCR_IBEAM 32513
+#define OCR_WAIT 32514
+#define OCR_CROSS 32515
+#define OCR_UP 32516
+#define OCR_SIZENWSE 32642
+#define OCR_SIZENESW 32643
+#define OCR_SIZEWE 32644
+#define OCR_SIZENS 32645
+#define OCR_SIZEALL 32646
+#define OCR_NO 32648
+#define OCR_HAND 32649
+#define OCR_APPSTARTING 32650
+#endif
 
 #if defined(WIN32) && !defined(_WIN32_WCE) && !defined(_MINCORE)
 #define _CRTDBG_MAP_ALLOC
@@ -473,6 +495,12 @@ int kvm_server_currentDesktopname = 0;
 
 static HANDLE g_privacyOverlayThread = NULL;
 static DWORD g_privacyOverlayThreadId = 0;
+static HWND g_privacyOverlayWindow = NULL;
+static HHOOK g_privacyMouseHook = NULL;
+static HHOOK g_privacyKeyboardHook = NULL;
+static HWINEVENTHOOK g_privacyForegroundHook = NULL;
+static HWINEVENTHOOK g_privacyShowHook = NULL;
+static int g_privacyCursorsHidden = 0;
 
 typedef LONG(WINAPI *RtlGetVersionHandler)(POSVERSIONINFOW);
 typedef BOOL(WINAPI *SetWindowDisplayAffinityHandler)(HWND, DWORD);
@@ -506,6 +534,158 @@ static int kvm_privacy_overlay_supported()
 	if (rtlGetVersion == NULL || rtlGetVersion(&versionInfo) != 0) { return 0; }
 
 	return (versionInfo.dwMajorVersion > 10 || (versionInfo.dwMajorVersion == 10 && versionInfo.dwBuildNumber >= 19041));
+}
+
+static void kvm_privacy_overlay_raise()
+{
+	if (g_privacyOverlayWindow != NULL)
+	{
+		SetWindowPos(g_privacyOverlayWindow, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+	}
+}
+
+void CALLBACK kvm_privacy_overlay_win_event(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idObject, LONG idChild, DWORD eventThread, DWORD eventTime)
+{
+	UNREFERENCED_PARAMETER(hook);
+	UNREFERENCED_PARAMETER(event);
+	UNREFERENCED_PARAMETER(hwnd);
+	UNREFERENCED_PARAMETER(idObject);
+	UNREFERENCED_PARAMETER(idChild);
+	UNREFERENCED_PARAMETER(eventThread);
+	UNREFERENCED_PARAMETER(eventTime);
+
+	kvm_privacy_overlay_raise();
+}
+
+static int kvm_privacy_overlay_event_hooks_install()
+{
+	if (g_privacyForegroundHook == NULL)
+	{
+		g_privacyForegroundHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, NULL, kvm_privacy_overlay_win_event, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+	}
+	if (g_privacyShowHook == NULL)
+	{
+		g_privacyShowHook = SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW, NULL, kvm_privacy_overlay_win_event, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+	}
+	return (g_privacyForegroundHook != NULL && g_privacyShowHook != NULL);
+}
+
+static void kvm_privacy_overlay_event_hooks_remove()
+{
+	if (g_privacyForegroundHook != NULL)
+	{
+		UnhookWinEvent(g_privacyForegroundHook);
+		g_privacyForegroundHook = NULL;
+	}
+	if (g_privacyShowHook != NULL)
+	{
+		UnhookWinEvent(g_privacyShowHook);
+		g_privacyShowHook = NULL;
+	}
+}
+
+LRESULT CALLBACK kvm_privacy_mouse_hook(int nCode, WPARAM wParam, LPARAM lParam)
+{
+	MSLLHOOKSTRUCT *hookData = (MSLLHOOKSTRUCT*)lParam;
+	UNREFERENCED_PARAMETER(wParam);
+
+	if (nCode == HC_ACTION && hookData != NULL && (hookData->flags & LLMHF_INJECTED) == 0)
+	{
+		return 1;
+	}
+	return CallNextHookEx(g_privacyMouseHook, nCode, wParam, lParam);
+}
+
+LRESULT CALLBACK kvm_privacy_keyboard_hook(int nCode, WPARAM wParam, LPARAM lParam)
+{
+	KBDLLHOOKSTRUCT *hookData = (KBDLLHOOKSTRUCT*)lParam;
+	UNREFERENCED_PARAMETER(wParam);
+
+	if (nCode == HC_ACTION && hookData != NULL && (hookData->flags & LLKHF_INJECTED) == 0)
+	{
+		return 1;
+	}
+	return CallNextHookEx(g_privacyKeyboardHook, nCode, wParam, lParam);
+}
+
+static int kvm_privacy_input_hooks_install()
+{
+	HINSTANCE module = GetModuleHandle(NULL);
+
+	if (g_privacyMouseHook == NULL)
+	{
+		g_privacyMouseHook = SetWindowsHookExA(WH_MOUSE_LL, kvm_privacy_mouse_hook, module, 0);
+	}
+	if (g_privacyKeyboardHook == NULL)
+	{
+		g_privacyKeyboardHook = SetWindowsHookExA(WH_KEYBOARD_LL, kvm_privacy_keyboard_hook, module, 0);
+	}
+	return (g_privacyMouseHook != NULL && g_privacyKeyboardHook != NULL);
+}
+
+static void kvm_privacy_input_hooks_remove()
+{
+	if (g_privacyMouseHook != NULL)
+	{
+		UnhookWindowsHookEx(g_privacyMouseHook);
+		g_privacyMouseHook = NULL;
+	}
+	if (g_privacyKeyboardHook != NULL)
+	{
+		UnhookWindowsHookEx(g_privacyKeyboardHook);
+		g_privacyKeyboardHook = NULL;
+	}
+}
+
+static HCURSOR kvm_privacy_create_transparent_cursor()
+{
+	BYTE andMask[128];
+	BYTE xorMask[128];
+	memset(andMask, 0xFF, sizeof(andMask));
+	memset(xorMask, 0x00, sizeof(xorMask));
+	return CreateCursor(GetModuleHandle(NULL), 0, 0, 32, 32, andMask, xorMask);
+}
+
+static int kvm_privacy_cursor_hide()
+{
+	DWORD cursorIds[] = {
+		OCR_NORMAL, OCR_IBEAM, OCR_WAIT, OCR_CROSS, OCR_UP,
+		OCR_SIZENWSE, OCR_SIZENESW, OCR_SIZEWE, OCR_SIZENS, OCR_SIZEALL,
+		OCR_NO, OCR_HAND, OCR_APPSTARTING
+	};
+	int i;
+	int ok = 1;
+
+	if (g_privacyCursorsHidden != 0) { return 1; }
+
+	for (i = 0; i < (int)(sizeof(cursorIds) / sizeof(cursorIds[0])); ++i)
+	{
+		HCURSOR cursor = kvm_privacy_create_transparent_cursor();
+		if (cursor == NULL || SetSystemCursor(cursor, cursorIds[i]) == 0)
+		{
+			if (cursor != NULL) { DestroyCursor(cursor); }
+			ok = 0;
+			break;
+		}
+	}
+
+	if (ok == 0)
+	{
+		SystemParametersInfoA(SPI_SETCURSORS, 0, NULL, 0);
+		return 0;
+	}
+
+	g_privacyCursorsHidden = 1;
+	return 1;
+}
+
+static void kvm_privacy_cursor_restore()
+{
+	if (g_privacyCursorsHidden != 0)
+	{
+		SystemParametersInfoA(SPI_SETCURSORS, 0, NULL, 0);
+		g_privacyCursorsHidden = 0;
+	}
 }
 
 static void kvm_privacy_overlay_bitmap_destroy(KVMPrivacyOverlayBitmap *overlayBitmap)
@@ -630,6 +810,7 @@ static void kvm_privacy_overlay_destroy(HWND *hwnd)
 		DestroyWindow(*hwnd);
 		*hwnd = NULL;
 	}
+	g_privacyOverlayWindow = NULL;
 }
 
 static HWND kvm_privacy_overlay_create()
@@ -685,6 +866,7 @@ static HWND kvm_privacy_overlay_create()
 	ShowWindow(hwnd, SW_SHOWNOACTIVATE);
 	SetTimer(hwnd, KVM_PRIVACY_OVERLAY_TIMER_ID, KVM_PRIVACY_OVERLAY_TIMER_MS, NULL);
 	UpdateWindow(hwnd);
+	g_privacyOverlayWindow = hwnd;
 	return hwnd;
 }
 
@@ -710,26 +892,38 @@ DWORD WINAPI kvm_privacy_overlay_thread(LPVOID param)
 		if (msg.message == KVM_PRIVACY_OVERLAY_SHOW)
 		{
 			KVMPrivacyOverlayRequest *request = (KVMPrivacyOverlayRequest*)msg.wParam;
+			int eventHooksActive = 0;
+			int inputHooksActive = 0;
+			int cursorHidden = 0;
 			if (overlay == NULL) { overlay = kvm_privacy_overlay_create(); }
 			if (overlay != NULL)
 			{
+				eventHooksActive = kvm_privacy_overlay_event_hooks_install();
+				inputHooksActive = kvm_privacy_input_hooks_install();
+				cursorHidden = kvm_privacy_cursor_hide();
 				SetWindowPos(overlay, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
 				InvalidateRect(overlay, NULL, TRUE);
 			}
 			if (request != NULL)
 			{
-				request->result = (overlay != NULL) ? 1 : 0;
+				request->result = (overlay != NULL && eventHooksActive != 0 && inputHooksActive != 0 && cursorHidden != 0) ? 1 : 0;
 				SetEvent(request->completed);
 			}
 			continue;
 		}
 		if (msg.message == KVM_PRIVACY_OVERLAY_HIDE)
 		{
+			kvm_privacy_overlay_event_hooks_remove();
+			kvm_privacy_input_hooks_remove();
+			kvm_privacy_cursor_restore();
 			kvm_privacy_overlay_destroy(&overlay);
 			continue;
 		}
 		if (msg.message == KVM_PRIVACY_OVERLAY_STOP)
 		{
+			kvm_privacy_overlay_event_hooks_remove();
+			kvm_privacy_input_hooks_remove();
+			kvm_privacy_cursor_restore();
 			kvm_privacy_overlay_destroy(&overlay);
 			break;
 		}
@@ -738,6 +932,9 @@ DWORD WINAPI kvm_privacy_overlay_thread(LPVOID param)
 		DispatchMessage(&msg);
 	}
 
+	kvm_privacy_overlay_event_hooks_remove();
+	kvm_privacy_input_hooks_remove();
+	kvm_privacy_cursor_restore();
 	kvm_privacy_overlay_destroy(&overlay);
 	UnregisterClassA(KVM_PRIVACY_OVERLAY_CLASS, GetModuleHandle(NULL));
 	g_privacyOverlayThreadId = 0;
@@ -837,6 +1034,10 @@ static void kvm_privacy_overlay_cleanup()
 		CloseHandle(g_privacyOverlayThread);
 		g_privacyOverlayThread = NULL;
 	}
+	kvm_privacy_overlay_event_hooks_remove();
+	kvm_privacy_input_hooks_remove();
+	kvm_privacy_cursor_restore();
+	g_privacyOverlayWindow = NULL;
 	g_privacyOverlayThreadId = 0;
 }
 
