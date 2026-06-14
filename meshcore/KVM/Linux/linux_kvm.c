@@ -792,12 +792,20 @@ int kvm_server_inputdata(char* block, int blocklen)
 		}
 	case MNG_AUDIO_START:
 		{
-			audio_relay_setup(kvm_audio_write_sink, NULL, NULL);
+			int sourceId = (size >= 6) ? (unsigned char)block[4] : AUDIO_SOURCE_SYSTEM;
+			int quality  = (size >= 6) ? (unsigned char)block[5] : 0;
+			audio_relay_setup(kvm_audio_write_sink, NULL, NULL, sourceId, quality);
 			break;
 		}
 	case MNG_AUDIO_STOP:
 		{
-			audio_relay_stop();
+			if (size >= 6) audio_relay_stop_source((unsigned char)block[4]);
+			else audio_relay_stop();
+			break;
+		}
+	case MNG_AUDIO_QUALITY:
+		{
+			if (size >= 6) audio_relay_set_quality((unsigned char)block[4], (unsigned char)block[5]);
 			break;
 		}
 	}

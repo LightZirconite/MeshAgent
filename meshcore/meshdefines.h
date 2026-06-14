@@ -66,10 +66,11 @@ typedef enum RemoteManagementCommands
 	MNG_DEBUG = 64,							// Debug/Logging Message for ILibRemoteLogging
 	MNG_ERROR = 65,
 	MNG_ENCAPSULATE_AGENT_COMMAND = 70,
-	MNG_AUDIO_DATA  = 71,   // agent → browser: raw PCM audio chunk
-	MNG_AUDIO_START = 72,   // browser → agent: start desktop audio capture
-	MNG_AUDIO_STOP  = 73,   // browser → agent: stop desktop audio capture
-	MNG_AUDIO_INFO  = 74    // agent → browser: audio format (sample_rate, channels, bits)
+	MNG_AUDIO_DATA    = 71, // agent → browser: PCM chunk [sourceId(1),flags(1),seq(2), PCM...]
+	MNG_AUDIO_START   = 72, // browser → agent: start capture [sourceId(1), quality(1)]
+	MNG_AUDIO_STOP    = 73, // browser → agent: stop capture  [sourceId(1)] (absent = all)
+	MNG_AUDIO_INFO    = 74, // agent → browser: format [rate(4),channels(2),bits(2),sourceId(1)]
+	MNG_AUDIO_QUALITY = 75  // browser → agent: change quality on the fly [sourceId(1), level(1)]
 }RemoteManagementCommands;
 
 

