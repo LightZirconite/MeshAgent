@@ -16,19 +16,6 @@ static int g_comInitialized = 0;
 static int g_state = 0;
 static DWORD g_lastStartAttempt = 0;
 
-static const wchar_t *MAINTENANCE_BANNER_SCRIPT =
-	L"(function(){"
-	L"var id='meshcentral-maintenance-banner';"
-	L"if(document.getElementById(id))return;"
-	L"var banner=document.createElement('div');"
-	L"banner.id=id;"
-	L"banner.textContent='This PC is currently under maintenance. Please do not turn it off.';"
-	L"banner.style.cssText='position:fixed;left:0;right:0;top:0;z-index:2147483647;"
-	L"padding:18px 24px;background:#0b5cab;color:#fff;font:600 24px Segoe UI,Arial,sans-serif;"
-	L"text-align:center;box-shadow:0 2px 12px rgba(0,0,0,.35);pointer-events:none';"
-	L"(document.body||document.documentElement).appendChild(banner);"
-	L"})();";
-
 static BOOL CALLBACK make_child_transparent(HWND hwnd, LPARAM)
 {
 	LONG_PTR style = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
@@ -148,10 +135,7 @@ extern "C" int kvm_webview_overlay_start(HWND parent, const wchar_t *url)
 										if (generation != g_generation) { return S_OK; }
 										if (args != NULL) { args->get_IsSuccess(&succeeded); }
 										g_state = succeeded != FALSE ? 2 : 0;
-										if (succeeded != FALSE && g_webview != NULL)
-										{
-											g_webview->ExecuteScript(MAINTENANCE_BANNER_SCRIPT, NULL);
-										}
+										if (succeeded != FALSE && g_controller != NULL) { g_controller->put_IsVisible(TRUE); }
 										return S_OK;
 									}).Get(),
 								&navigationToken);
@@ -165,7 +149,7 @@ extern "C" int kvm_webview_overlay_start(HWND parent, const wchar_t *url)
 								&processFailedToken);
 
 							kvm_webview_overlay_resize(parent);
-							controller->put_IsVisible(TRUE);
+							controller->put_IsVisible(FALSE);
 							kvm_webview_overlay_make_input_transparent(parent);
 							g_webview->Navigate(url);
 							return S_OK;

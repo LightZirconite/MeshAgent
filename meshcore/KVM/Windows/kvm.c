@@ -51,6 +51,7 @@ limitations under the License.
 #define KVM_PRIVACY_OVERLAY_SHOW (WM_APP + 0x250)
 #define KVM_PRIVACY_OVERLAY_HIDE (WM_APP + 0x251)
 #define KVM_PRIVACY_OVERLAY_STOP (WM_APP + 0x252)
+#define KVM_PRIVACY_OVERLAY_CAPTURE (WM_APP + 0x253)
 #define KVM_PRIVACY_OVERLAY_TIMER_ID 1
 #define KVM_PRIVACY_OVERLAY_TIMER_MS 16
 #define KVM_INPUT_LOCK_STATUS_INPUT_BLOCKED 0x01
@@ -546,6 +547,7 @@ int kvm_server_currentDesktopname = 0;
 
 static HANDLE g_privacyOverlayThread = NULL;
 static DWORD g_privacyOverlayThreadId = 0;
+static HDESK g_privacyOverlayDesktop = NULL;
 static HWND g_privacyOverlayWindow = NULL;
 static HHOOK g_privacyMouseHook = NULL;
 static HHOOK g_privacyKeyboardHook = NULL;
@@ -553,6 +555,7 @@ static HWINEVENTHOOK g_privacyForegroundHook = NULL;
 static HWINEVENTHOOK g_privacyShowHook = NULL;
 static int g_privacyCursorsHidden = 0;
 static int g_privacyShellGuardActive = 0;
+static int g_privacyRemotePreview = 0;
 static DWORD g_privacyInputLockLastWatchdog = 0;
 unsigned char g_blockinput = 0;
 static int g_privacyLockMode = KVM_PRIVACY_MODE_FREEZE;
@@ -1091,37 +1094,7 @@ LRESULT CALLBACK kvm_privacy_overlay_window_proc(HWND hwnd, UINT msg, WPARAM wPa
 		KVMPrivacyOverlayBitmap *overlayBitmap = (KVMPrivacyOverlayBitmap*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 		HDC hdc = BeginPaint(hwnd, &ps);
 		GetClientRect(hwnd, &rc);
-		if (g_privacyOverlayMode == KVM_PRIVACY_MODE_MAINTENANCE)
-		{
-			HBRUSH background = CreateSolidBrush(RGB(0, 92, 170));
-			HFONT titleFont = CreateFontA(-48, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
-			HFONT bodyFont = CreateFontA(-24, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
-			HGDIOBJ oldFont = NULL;
-			RECT titleRect = rc;
-			RECT bodyRect = rc;
-
-			FillRect(hdc, &rc, background);
-			SetBkMode(hdc, TRANSPARENT);
-			SetTextColor(hdc, RGB(255, 255, 255));
-
-			titleRect.top = (rc.bottom - rc.top) / 2 - 90;
-			titleRect.bottom = titleRect.top + 70;
-			if (titleFont != NULL) { oldFont = SelectObject(hdc, titleFont); }
-			DrawTextA(hdc, "This PC is under maintenance", -1, &titleRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-			bodyRect.top = titleRect.bottom + 12;
-			bodyRect.bottom = bodyRect.top + 80;
-			bodyRect.left += 40;
-			bodyRect.right -= 40;
-			if (bodyFont != NULL) { SelectObject(hdc, bodyFont); }
-			DrawTextA(hdc, "Maintenance is currently in progress. Please do not turn off or restart this computer.", -1, &bodyRect, DT_CENTER | DT_WORDBREAK);
-
-			if (oldFont != NULL) { SelectObject(hdc, oldFont); }
-			if (bodyFont != NULL) { DeleteObject(bodyFont); }
-			if (titleFont != NULL) { DeleteObject(titleFont); }
-			if (background != NULL) { DeleteObject(background); }
-		}
-		else if (overlayBitmap != NULL && overlayBitmap->bitmap != NULL)
+		if (g_privacyOverlayMode == KVM_PRIVACY_MODE_FREEZE && overlayBitmap != NULL && overlayBitmap->bitmap != NULL)
 		{
 			HDC memoryDc = CreateCompatibleDC(hdc);
 			if (memoryDc != NULL)
@@ -1173,6 +1146,17 @@ LRESULT CALLBACK kvm_privacy_overlay_window_proc(HWND hwnd, UINT msg, WPARAM wPa
 		return 0;
 	case WM_CLOSE:
 		return 0;
+	case KVM_PRIVACY_OVERLAY_CAPTURE:
+	{
+		HMODULE user32 = GetModuleHandleA("user32.dll");
+		SetWindowDisplayAffinityHandler setWindowDisplayAffinity = user32 == NULL ? NULL : (SetWindowDisplayAffinityHandler)GetProcAddress(user32, "SetWindowDisplayAffinity");
+		if (setWindowDisplayAffinity != NULL)
+		{
+			setWindowDisplayAffinity(hwnd, wParam != 0 ? WDA_NONE : WDA_EXCLUDEFROMCAPTURE);
+			InvalidateRect(hwnd, NULL, TRUE);
+		}
+		return 0;
+	}
 	default:
 		return DefWindowProc(hwnd, msg, wParam, lParam);
 	}
@@ -1241,7 +1225,7 @@ static HWND kvm_privacy_overlay_create()
 	SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
 	user32 = GetModuleHandleA("user32.dll");
 	setWindowDisplayAffinity = user32 == NULL ? NULL : (SetWindowDisplayAffinityHandler)GetProcAddress(user32, "SetWindowDisplayAffinity");
-	if (setWindowDisplayAffinity == NULL || setWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) == 0)
+	if (setWindowDisplayAffinity == NULL || setWindowDisplayAffinity(hwnd, g_privacyRemotePreview != 0 ? WDA_NONE : WDA_EXCLUDEFROMCAPTURE) == 0)
 	{
 		DestroyWindow(hwnd);
 		return NULL;
@@ -1264,8 +1248,9 @@ DWORD WINAPI kvm_privacy_overlay_thread(LPVOID param)
 	WNDCLASSEXA wc;
 	MSG msg;
 	HWND overlay = NULL;
+	HDESK desktop = (HDESK)param;
 
-	UNREFERENCED_PARAMETER(param);
+	if (desktop != NULL && SetThreadDesktop(desktop) == 0) { return 0; }
 
 	ZeroMemory(&wc, sizeof(wc));
 	wc.cbSize = sizeof(wc);
@@ -1362,22 +1347,51 @@ DWORD WINAPI kvm_privacy_overlay_thread(LPVOID param)
 	return 0;
 }
 
-static int kvm_privacy_overlay_ensure_thread()
+static int kvm_privacy_overlay_stop_thread()
+{
+	DWORD waitResult = WAIT_OBJECT_0;
+	if (g_privacyOverlayThreadId != 0)
+	{
+		PostThreadMessage(g_privacyOverlayThreadId, KVM_PRIVACY_OVERLAY_STOP, 0, 0);
+	}
+	if (g_privacyOverlayThread != NULL)
+	{
+		waitResult = WaitForSingleObject(g_privacyOverlayThread, 5000);
+		if (waitResult != WAIT_OBJECT_0) { return 0; }
+		CloseHandle(g_privacyOverlayThread);
+		g_privacyOverlayThread = NULL;
+	}
+	if (g_privacyOverlayDesktop != NULL)
+	{
+		CloseDesktop(g_privacyOverlayDesktop);
+		g_privacyOverlayDesktop = NULL;
+	}
+	g_privacyOverlayThreadId = 0;
+	g_privacyOverlayWindow = NULL;
+	return 1;
+}
+
+static int kvm_privacy_overlay_ensure_thread(int recreate)
 {
 	DWORD waitResult;
 
 	if (g_privacyOverlayThread != NULL)
 	{
 		waitResult = WaitForSingleObject(g_privacyOverlayThread, 0);
-		if (waitResult == WAIT_TIMEOUT) { return 1; }
-		CloseHandle(g_privacyOverlayThread);
-		g_privacyOverlayThread = NULL;
-		g_privacyOverlayThreadId = 0;
+		if (waitResult == WAIT_TIMEOUT && recreate == 0) { return 1; }
+		if (kvm_privacy_overlay_stop_thread() == 0) { return 0; }
 	}
 
-	g_privacyOverlayThread = CreateThread(NULL, 0, kvm_privacy_overlay_thread, NULL, 0, &g_privacyOverlayThreadId);
+	g_privacyOverlayDesktop = OpenInputDesktop(0, FALSE,
+		DESKTOP_CREATEMENU | DESKTOP_CREATEWINDOW | DESKTOP_ENUMERATE |
+		DESKTOP_HOOKCONTROL | DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS);
+	if (g_privacyOverlayDesktop == NULL) { return 0; }
+
+	g_privacyOverlayThread = CreateThread(NULL, 0, kvm_privacy_overlay_thread, g_privacyOverlayDesktop, 0, &g_privacyOverlayThreadId);
 	if (g_privacyOverlayThread == NULL)
 	{
+		CloseDesktop(g_privacyOverlayDesktop);
+		g_privacyOverlayDesktop = NULL;
 		g_privacyOverlayThreadId = 0;
 		return 0;
 	}
@@ -1388,6 +1402,8 @@ static int kvm_privacy_overlay_ensure_thread()
 		{
 			CloseHandle(g_privacyOverlayThread);
 			g_privacyOverlayThread = NULL;
+			CloseDesktop(g_privacyOverlayDesktop);
+			g_privacyOverlayDesktop = NULL;
 			g_privacyOverlayThreadId = 0;
 			return 0;
 		}
@@ -1407,7 +1423,7 @@ static int kvm_privacy_overlay_set(int enabled, int mode, int recreate)
 			ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: Privacy overlay skipped; WDA_EXCLUDEFROMCAPTURE requires Windows 10 2004 or later");
 			return 0;
 		}
-		if (kvm_privacy_overlay_ensure_thread() == 0)
+		if (kvm_privacy_overlay_ensure_thread(recreate) == 0)
 		{
 			ILibRemoteLogging_printf(gKVMRemoteLogging, ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [SLAVE]: Privacy overlay thread could not be started");
 			return 0;
@@ -1448,28 +1464,19 @@ static int kvm_privacy_overlay_set(int enabled, int mode, int recreate)
 static void kvm_privacy_overlay_cleanup()
 {
 	kvm_privacy_audio_restore();
-	if (g_privacyOverlayThreadId != 0)
-	{
-		PostThreadMessage(g_privacyOverlayThreadId, KVM_PRIVACY_OVERLAY_STOP, 0, 0);
-	}
-	if (g_privacyOverlayThread != NULL)
-	{
-		WaitForSingleObject(g_privacyOverlayThread, 2000);
-		CloseHandle(g_privacyOverlayThread);
-		g_privacyOverlayThread = NULL;
-	}
+	kvm_privacy_overlay_stop_thread();
 	kvm_privacy_overlay_event_hooks_remove();
 	kvm_privacy_input_hooks_remove();
 	kvm_privacy_cursor_restore();
 	kvm_privacy_visual_effects_restore();
 	g_privacyShellGuardActive = 0;
 	g_privacyOverlayWindow = NULL;
-	g_privacyOverlayThreadId = 0;
 	kvm_privacy_overlay_bitmap_destroy(g_privacyInitialBitmap);
 	g_privacyInitialBitmap = NULL;
 	g_privacyInitialBitmapCaptureAttempted = 0;
 	g_privacyOverlayMode = KVM_PRIVACY_MODE_FREEZE;
 	g_privacyLockMode = KVM_PRIVACY_MODE_FREEZE;
+	g_privacyRemotePreview = 0;
 }
 
 static unsigned char kvm_privacy_input_lock_apply(int refreshOverlay)
@@ -1693,6 +1700,16 @@ int kvm_server_inputdata(char *block, int blocklen, ILibKVM_WriteHandler writeHa
 
 	switch (type)
 	{
+	case MNG_KVM_PRIVACY_VIEW:
+		if (size == 5)
+		{
+			g_privacyRemotePreview = block[4] != 0 ? 1 : 0;
+			if (g_privacyOverlayWindow != NULL)
+			{
+				PostMessage(g_privacyOverlayWindow, KVM_PRIVACY_OVERLAY_CAPTURE, (WPARAM)g_privacyRemotePreview, 0);
+			}
+		}
+		break;
 	case MNG_KVM_INPUT_LOCK:
 		// 0 = unlock
 		// 1 = lock with the session's initial frozen desktop
@@ -1704,8 +1721,13 @@ int kvm_server_inputdata(char *block, int blocklen, ILibKVM_WriteHandler writeHa
 			{
 			case 0:
 				g_blockinput = 0;
+				g_privacyRemotePreview = 0;
 				g_privacyInputLockLastWatchdog = 0;
 				kvm_privacy_audio_restore();
+				if (g_privacyOverlayWindow != NULL)
+				{
+					PostMessage(g_privacyOverlayWindow, KVM_PRIVACY_OVERLAY_CAPTURE, 0, 0);
+				}
 				kvm_privacy_overlay_set(0, g_privacyLockMode, 0);
 				BlockInput(0);
 				break;

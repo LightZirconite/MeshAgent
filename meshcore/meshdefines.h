@@ -23,6 +23,7 @@ limitations under the License.
 
 typedef enum RemoteManagementCommands
 {
+	MNG_KVM_PRIVACY_VIEW = 86,
 	MNG_KVM_INPUT_LOCK = 87,
 	MNG_KVM_DISPLAY_INFO = 82,
 	MNG_KVM_NOP = 0,
