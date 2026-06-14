@@ -10,7 +10,7 @@ extern "C" {
 
 int kvm_webview_overlay_start(HWND parent, const wchar_t *url);
 void kvm_webview_overlay_resize(HWND parent);
-void kvm_webview_overlay_make_input_transparent(HWND parent);
+void kvm_webview_overlay_watchdog(HWND parent, const wchar_t *url);
 void kvm_webview_overlay_stop(void);
 
 #ifdef __cplusplus

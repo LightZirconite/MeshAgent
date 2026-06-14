@@ -650,6 +650,7 @@ typedef struct KVMPrivacyOverlayRequest
 	HANDLE completed;
 	int result;
 	int mode;
+	int recreate;
 } KVMPrivacyOverlayRequest;
 
 static KVMPrivacyOverlayBitmap *g_privacyInitialBitmap = NULL;
@@ -1106,14 +1107,14 @@ LRESULT CALLBACK kvm_privacy_overlay_window_proc(HWND hwnd, UINT msg, WPARAM wPa
 			titleRect.top = (rc.bottom - rc.top) / 2 - 90;
 			titleRect.bottom = titleRect.top + 70;
 			if (titleFont != NULL) { oldFont = SelectObject(hdc, titleFont); }
-			DrawTextA(hdc, "Maintenance a distance", -1, &titleRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+			DrawTextA(hdc, "This PC is under maintenance", -1, &titleRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
 			bodyRect.top = titleRect.bottom + 12;
 			bodyRect.bottom = bodyRect.top + 80;
 			bodyRect.left += 40;
 			bodyRect.right -= 40;
 			if (bodyFont != NULL) { SelectObject(hdc, bodyFont); }
-			DrawTextA(hdc, "Une operation de maintenance est en cours. Le clavier et la souris seront restitues a la fin de l'intervention.", -1, &bodyRect, DT_CENTER | DT_WORDBREAK);
+			DrawTextA(hdc, "Maintenance is currently in progress. Please do not turn off or restart this computer.", -1, &bodyRect, DT_CENTER | DT_WORDBREAK);
 
 			if (oldFont != NULL) { SelectObject(hdc, oldFont); }
 			if (bodyFont != NULL) { DeleteObject(bodyFont); }
@@ -1147,9 +1148,23 @@ LRESULT CALLBACK kvm_privacy_overlay_window_proc(HWND hwnd, UINT msg, WPARAM wPa
 	case WM_TIMER:
 		if (g_privacyOverlayMode == KVM_PRIVACY_MODE_MAINTENANCE)
 		{
-			kvm_webview_overlay_make_input_transparent(hwnd);
+			kvm_webview_overlay_watchdog(hwnd, KVM_MAINTENANCE_URL);
 		}
-		SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+		{
+			int x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+			int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+			int w = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+			int h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+			if (w <= 0 || h <= 0)
+			{
+				x = 0;
+				y = 0;
+				w = GetSystemMetrics(SM_CXSCREEN);
+				h = GetSystemMetrics(SM_CYSCREEN);
+			}
+			if (IsIconic(hwnd) != 0) { ShowWindow(hwnd, SW_RESTORE); }
+			SetWindowPos(hwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+		}
 		return 0;
 	case WM_DESTROY:
 		kvm_webview_overlay_stop();
@@ -1270,7 +1285,8 @@ DWORD WINAPI kvm_privacy_overlay_thread(LPVOID param)
 			int inputHooksActive = 0;
 			int cursorHidden = 0;
 			int requestedMode = request != NULL ? request->mode : KVM_PRIVACY_MODE_FREEZE;
-			if (overlay != NULL && requestedMode != g_privacyOverlayMode)
+			if (overlay != NULL && (IsWindow(overlay) == 0 || requestedMode != g_privacyOverlayMode ||
+				(request != NULL && request->recreate != 0)))
 			{
 				/*
 				 * The overlay's contents and bitmap association are fixed at
@@ -1380,7 +1396,7 @@ static int kvm_privacy_overlay_ensure_thread()
 	return 1;
 }
 
-static int kvm_privacy_overlay_set(int enabled, int mode)
+static int kvm_privacy_overlay_set(int enabled, int mode, int recreate)
 {
 	if (enabled)
 	{
@@ -1399,6 +1415,7 @@ static int kvm_privacy_overlay_set(int enabled, int mode)
 
 		ZeroMemory(&request, sizeof(request));
 		request.mode = mode;
+		request.recreate = recreate;
 		request.completed = CreateEvent(NULL, TRUE, FALSE, NULL);
 		if (request.completed == NULL)
 		{
@@ -1469,7 +1486,7 @@ static unsigned char kvm_privacy_input_lock_apply(int refreshOverlay)
 	inputBlocked = BlockInput(1);
 	if (inputBlocked != 0) { status |= KVM_INPUT_LOCK_STATUS_INPUT_BLOCKED; }
 
-	privacyOverlayActive = kvm_privacy_overlay_set(1, g_privacyLockMode);
+	privacyOverlayActive = kvm_privacy_overlay_set(1, g_privacyLockMode, refreshOverlay);
 	if (privacyOverlayActive != 0) { status |= KVM_INPUT_LOCK_STATUS_PRIVACY_ACTIVE; }
 	if (g_privacyLockMode == KVM_PRIVACY_MODE_MAINTENANCE) { status |= KVM_INPUT_LOCK_STATUS_MAINTENANCE; }
 	kvm_privacy_audio_mute();
@@ -1689,7 +1706,7 @@ int kvm_server_inputdata(char *block, int blocklen, ILibKVM_WriteHandler writeHa
 				g_blockinput = 0;
 				g_privacyInputLockLastWatchdog = 0;
 				kvm_privacy_audio_restore();
-				kvm_privacy_overlay_set(0, g_privacyLockMode);
+				kvm_privacy_overlay_set(0, g_privacyLockMode, 0);
 				BlockInput(0);
 				break;
 			case 1:

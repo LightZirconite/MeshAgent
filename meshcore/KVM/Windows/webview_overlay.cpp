@@ -13,6 +13,21 @@ static ComPtr<ICoreWebView2> g_webview;
 static HWND g_parent = NULL;
 static LONG g_generation = 0;
 static int g_comInitialized = 0;
+static int g_state = 0;
+static DWORD g_lastStartAttempt = 0;
+
+static const wchar_t *MAINTENANCE_BANNER_SCRIPT =
+	L"(function(){"
+	L"var id='meshcentral-maintenance-banner';"
+	L"if(document.getElementById(id))return;"
+	L"var banner=document.createElement('div');"
+	L"banner.id=id;"
+	L"banner.textContent='This PC is currently under maintenance. Please do not turn it off.';"
+	L"banner.style.cssText='position:fixed;left:0;right:0;top:0;z-index:2147483647;"
+	L"padding:18px 24px;background:#0b5cab;color:#fff;font:600 24px Segoe UI,Arial,sans-serif;"
+	L"text-align:center;box-shadow:0 2px 12px rgba(0,0,0,.35);pointer-events:none';"
+	L"(document.body||document.documentElement).appendChild(banner);"
+	L"})();";
 
 static BOOL CALLBACK make_child_transparent(HWND hwnd, LPARAM)
 {
@@ -21,7 +36,7 @@ static BOOL CALLBACK make_child_transparent(HWND hwnd, LPARAM)
 	return TRUE;
 }
 
-extern "C" void kvm_webview_overlay_make_input_transparent(HWND parent)
+static void kvm_webview_overlay_make_input_transparent(HWND parent)
 {
 	if (parent != NULL) { EnumChildWindows(parent, make_child_transparent, 0); }
 }
@@ -45,6 +60,7 @@ extern "C" void kvm_webview_overlay_stop(void)
 	g_controller.Reset();
 	g_environment.Reset();
 	g_parent = NULL;
+	g_state = 0;
 	if (g_comInitialized != 0)
 	{
 		CoUninitialize();
@@ -61,11 +77,13 @@ extern "C" int kvm_webview_overlay_start(HWND parent, const wchar_t *url)
 
 	if (parent == NULL || url == NULL || url[0] == 0) { return 0; }
 	kvm_webview_overlay_stop();
+	g_lastStartAttempt = GetTickCount();
 
 	hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 	if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) { return 0; }
 	g_comInitialized = SUCCEEDED(hr) ? 1 : 0;
 	g_parent = parent;
+	g_state = 1;
 	generation = InterlockedIncrement(&g_generation);
 
 	userDataFolder[0] = 0;
@@ -84,6 +102,7 @@ extern "C" int kvm_webview_overlay_start(HWND parent, const wchar_t *url)
 				if (FAILED(result) || environment == NULL || generation != g_generation ||
 					parent != g_parent || IsWindow(parent) == 0)
 				{
+					if (generation == g_generation) { g_state = 0; }
 					return S_OK;
 				}
 
@@ -94,10 +113,13 @@ extern "C" int kvm_webview_overlay_start(HWND parent, const wchar_t *url)
 						[parent, url, generation](HRESULT controllerResult, ICoreWebView2Controller *controller) -> HRESULT
 						{
 							ComPtr<ICoreWebView2Settings> settings;
+							EventRegistrationToken navigationToken;
+							EventRegistrationToken processFailedToken;
 							if (FAILED(controllerResult) || controller == NULL ||
 								generation != g_generation || parent != g_parent ||
 								IsWindow(parent) == 0)
 							{
+								if (generation == g_generation) { g_state = 0; }
 								return S_OK;
 							}
 
@@ -105,6 +127,7 @@ extern "C" int kvm_webview_overlay_start(HWND parent, const wchar_t *url)
 							if (FAILED(controller->get_CoreWebView2(g_webview.ReleaseAndGetAddressOf())) ||
 								g_webview == NULL)
 							{
+								g_state = 0;
 								return S_OK;
 							}
 
@@ -116,6 +139,30 @@ extern "C" int kvm_webview_overlay_start(HWND parent, const wchar_t *url)
 								settings->put_IsStatusBarEnabled(FALSE);
 								settings->put_IsZoomControlEnabled(FALSE);
 							}
+
+							g_webview->add_NavigationCompleted(
+								Callback<ICoreWebView2NavigationCompletedEventHandler>(
+									[generation](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs *args) -> HRESULT
+									{
+										BOOL succeeded = FALSE;
+										if (generation != g_generation) { return S_OK; }
+										if (args != NULL) { args->get_IsSuccess(&succeeded); }
+										g_state = succeeded != FALSE ? 2 : 0;
+										if (succeeded != FALSE && g_webview != NULL)
+										{
+											g_webview->ExecuteScript(MAINTENANCE_BANNER_SCRIPT, NULL);
+										}
+										return S_OK;
+									}).Get(),
+								&navigationToken);
+							g_webview->add_ProcessFailed(
+								Callback<ICoreWebView2ProcessFailedEventHandler>(
+									[generation](ICoreWebView2*, ICoreWebView2ProcessFailedEventArgs*) -> HRESULT
+									{
+										if (generation == g_generation) { g_state = 0; }
+										return S_OK;
+									}).Get(),
+								&processFailedToken);
 
 							kvm_webview_overlay_resize(parent);
 							controller->put_IsVisible(TRUE);
@@ -131,4 +178,24 @@ extern "C" int kvm_webview_overlay_start(HWND parent, const wchar_t *url)
 		return 0;
 	}
 	return 1;
+}
+
+extern "C" void kvm_webview_overlay_watchdog(HWND parent, const wchar_t *url)
+{
+	DWORD now;
+	if (parent == NULL || url == NULL || url[0] == 0 || IsWindow(parent) == 0) { return; }
+
+	if (parent == g_parent && g_controller != NULL && g_state != 0)
+	{
+		g_controller->put_IsVisible(TRUE);
+		kvm_webview_overlay_resize(parent);
+		kvm_webview_overlay_make_input_transparent(parent);
+		return;
+	}
+
+	now = GetTickCount();
+	if ((now - g_lastStartAttempt) >= 3000)
+	{
+		kvm_webview_overlay_start(parent, url);
+	}
 }
